@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recipe to Cart</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Recipe to Instacart</h1>
+
+    <div class="container">
+        <section id="upload-section">
+            <h2>1. Upload Recipe Image(s)</h2>
+            <input type="file" id="recipe-image-upload" name="recipe-image-upload" accept="image/*" multiple>
+            <div id="image-preview-area"></div>
+        </section>
+
+        <section id="results-section">
+            <h2>2. Extracted Recipes</h2>
+            <div id="recipe-results-container"></div>
+            
+            <div id="loading-indicator" class="loading" style="display: none;">Processing images...</div>
+            <div id="error-message" class="error-message"></div>
+        </section>
+
+        <section id="instacart-section">
+            <h2>3. Create Instacart List</h2>
+            <button id="create-list-button" disabled>Create Instacart List</button>
+            <div id="instacart-link-area"></div>
+             <div id="instacart-loading-indicator" style="display: none;">Creating list...</div>
+             <div id="instacart-error-message" class="error"></div>
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html> 

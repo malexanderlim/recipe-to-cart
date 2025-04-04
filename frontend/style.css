@@ -1,0 +1,291 @@
+body {
+    font-family: sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 20px;
+    background-color: #f4f4f4;
+}
+
+h1 {
+    text-align: center;
+    color: #333;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 20px auto;
+    background: #fff;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+section {
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+section:last-child {
+    border-bottom: none;
+}
+
+h2 {
+    color: #555;
+    margin-bottom: 15px;
+}
+
+h3 {
+    color: #666;
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+input[type="file"],
+input[type="text"],
+input[type="number"],
+textarea,
+button {
+    display: block;
+    width: calc(100% - 22px); /* Account for padding/border */
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1rem;
+}
+
+input[type="file"] {
+     width: auto; /* Don't make file input full width */
+     border: none;
+     padding-left: 0;
+}
+
+textarea {
+    resize: vertical;
+    min-height: 100px;
+    background-color: #f9f9f9;
+}
+
+button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    width: auto; /* Adjust button width */
+    padding: 10px 20px;
+}
+
+button:hover {
+    background-color: #0056b3;
+}
+
+button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+#image-preview-area img {
+    max-width: 150px;
+    max-height: 150px;
+    margin: 10px 10px 0 0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+#parsed-ingredients-list {
+    list-style: disc;
+    padding-left: 20px;
+}
+
+#parsed-ingredients-list li {
+    margin-bottom: 8px;
+}
+
+#servings-control {
+    display: flex; /* Use flexbox for alignment */
+    align-items: center; /* Align items vertically */
+    gap: 10px; /* Add space between elements */
+    margin-top: 15px;
+}
+
+#servings-control label {
+    margin-bottom: 0; /* Remove bottom margin for label */
+}
+
+#servings-control input[type="number"] {
+    width: 60px; /* Smaller width for number input */
+    margin-bottom: 0; /* Remove bottom margin */
+    text-align: center;
+}
+
+#servings-control button {
+    width: 30px; /* Fixed width for +/- buttons */
+    height: 30px;
+    padding: 0; /* Remove padding */
+    font-size: 1.2rem;
+    line-height: 30px; /* Center text vertically */
+    margin-bottom: 0; /* Remove bottom margin */
+}
+
+.error {
+    color: #dc3545;
+    margin-bottom: 10px;
+    font-weight: bold;
+}
+
+#loading-indicator,
+#instacart-loading-indicator {
+    margin: 15px 0;
+    color: #007bff;
+}
+
+#instacart-link-area a {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 10px 15px;
+    background-color: #28a745;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+}
+
+#instacart-link-area a:hover {
+    background-color: #218838;
+}
+
+/* Styles for Recipe Cards */
+#recipe-results-container {
+    display: flex; /* Arrange cards horizontally */
+    flex-wrap: wrap; /* Allow cards to wrap to the next line */
+    gap: 20px; /* Space between cards */
+    margin-top: 20px;
+}
+
+.recipe-card {
+    background-color: #f9f9f9;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 20px;
+    box-shadow: 0 1px 5px rgba(0,0,0,0.05);
+    flex: 1 1 350px; /* Flex properties: grow, shrink, basis (minimum width) */
+    min-width: 300px; /* Ensure cards don't get too small */
+    margin-bottom: 20px; /* Consistent bottom margin */
+}
+
+.recipe-card h3 { /* Recipe title */
+    margin-top: 0;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+}
+
+/* Style for ingredient list items with checkboxes */
+.ingredient-list { /* New class for the ul */
+    list-style: none; /* Remove default bullets */
+    padding-left: 0;
+}
+
+.ingredient-item { /* Class for each li */
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    cursor: pointer; /* Make it clear the item is interactive */
+}
+
+.ingredient-item input[type="checkbox"] {
+    margin-right: 10px;
+    width: auto; /* Override default block styling for inputs */
+    margin-bottom: 0; /* Override default */
+    cursor: pointer;
+    /* Optional: Make checkbox slightly larger */
+    transform: scale(1.1); 
+}
+
+.ingredient-item label { /* Wrap text in label for better clickability */
+    flex-grow: 1;
+    user-select: none; /* Prevent text selection on click */
+     /* Inherit cursor from parent */
+    cursor: inherit;
+}
+
+/* Adjust servings control layout within card */
+.scale-yield-controls { /* New wrapper div */
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 15px;
+    margin-bottom: 15px;
+    flex-wrap: wrap; /* Allow wrapping on smaller cards */
+}
+
+.scale-yield-controls label {
+     margin-bottom: 0;
+     white-space: nowrap; /* Keep label on one line */
+}
+
+.scale-yield-controls input[type="number"] {
+    width: 60px;
+    margin-bottom: 0;
+    text-align: center;
+    padding: 8px; /* Adjust padding */
+}
+
+.scale-yield-controls .yield-buttons {
+    display: flex;
+    gap: 5px;
+}
+
+.scale-yield-controls .yield-buttons button {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    font-size: 1.2rem;
+    line-height: 30px;
+    margin-bottom: 0;
+}
+
+/* Update old ID selectors if necessary, these might be superseded by the card structure */
+/* Commenting out old #servings-control styles as we use .scale-yield-controls now */
+/* #servings-control { ... } */
+/* #servings-control label { ... } */
+/* #servings-control input[type="number"] { ... } */
+/* #servings-control button { ... } */
+
+
+/* Adjust list style usage */
+/* Commenting out old #parsed-ingredients-list styles as we use .ingredient-list now */
+/* #parsed-ingredients-list { ... } */
+/* #parsed-ingredients-list li { ... } */
+
+
+/* Existing styles below... */
+
+.error {
+    color: #dc3545;
+    margin-bottom: 10px;
+    font-weight: bold;
+}
+
+#loading-indicator,
+#instacart-loading-indicator {
+    margin: 15px 0;
+    color: #007bff;
+}
+
+#instacart-link-area a {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 10px 15px;
+    background-color: #28a745;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+}
+
+#instacart-link-area a:hover {
+    background-color: #218838;
+} 

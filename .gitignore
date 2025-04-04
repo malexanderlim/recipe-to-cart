@@ -1,0 +1,9 @@
+# Ignore Google Cloud service account key file
+recipe-vision-sa-key.json
+*.json 
+
+# Ignore environment variables file
+backend/.env
+
+# Ignore Node.js dependencies
+backend/node_modules/ 
