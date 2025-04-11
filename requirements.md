@@ -5,6 +5,7 @@
 - [X] Ingredient Extraction: Extract ingredients list from recipe images using Google Vision & Anthropic Claude
 - [X] Recipe Scaling: Support scaling recipes up or down based on detected yield (servings, cups, etc.)
 - [X] Instacart Integration: Create a shopping list on Instacart using the Developer Platform API (combines multiple recipes)
+- [X] **Ingredient Consolidation:** Combine identical ingredients (after backend normalization) before sending to Instacart (*frontend logic implemented*).
 
 ## Frontend Requirements
 - [X] Simple HTML/CSS/JS interface
@@ -22,13 +23,14 @@
 - [X] Use Node.js server for handling API requests
 - [X] Implement image processing (Google Vision) + HEIC conversion
 - [X] Parse ingredients, title, and yield using Anthropic Claude API
+- [X] **Garlic Unit Normalization:** Convert extracted garlic units (cloves, heads) into shopping-friendly units (each/ounce) based on quantity.
 - [X] Connect to Instacart's Developer Platform API (key via .env)
 
 ## Ingredient Parsing Logic (via LLM)
-- [X] Extract quantities, units, and ingredient names
-- [X] Handle common units & abbreviations
-- [X] Default to "each" for units when none specified
-- [X] Attempt conversion of item counts (e.g., cloves) to weight (e.g., ounces)
+- [X] Extract quantities, units, and ingredient names accurately.
+- [X] Handle common units & abbreviations.
+- [X] Default to "each" for units when none specified and item is countable.
+- [-] Convert recipe units to shopping units (e.g., cloves/heads/sprigs to each/ounce) - *Now primarily handled by backend logic post-LLM extraction.*
 - [X] Extract recipe title
 - [X] Extract recipe yield (quantity and unit)
 - [N/A] **Ingredient Exclusion Support:** Ensure backend can handle potentially filtered ingredient lists (logic implemented fully on frontend).
@@ -37,13 +39,15 @@
 - [X] Create basic HTML/CSS layout
 - [X] Implement frontend JavaScript for file uploads and UI interactions
 - [X] Create Node.js server endpoints:
-  - [X] /api/upload (handles image processing and LLM parsing)
+  - [X] /api/upload (handles image processing, LLM parsing, and garlic normalization)
   - [X] /api/create-list (handles Instacart API call)
-- [-] Use `.env` file for API keys (Anthropic & Instacart)
+- [X] Use `.env` file for API keys (Anthropic & Instacart)
 - [/] Implement proper error handling and loading states (*basic states implemented, needs refinement*)
 - [X] Implement UI refresh (CSS adjustments, HTML structure changes via JS).
 - [X] Implement ingredient checkboxes (HTML generation in JS, update list creation logic in JS).
 - [X] Implement pantry item master checkbox and logic.
+- [X] Implement frontend ingredient consolidation.
+- [X] Implement backend garlic unit normalization (cloves/heads -> each/ounce).
 
 ## Testing
 - [ ] Test with diverse recipe image data (different layouts, formats, yields)
@@ -52,6 +56,8 @@
 - [X] Test ingredient exclusion functionality.
 - [X] Test responsiveness of the new layout.
 - [ ] Test pantry item checkbox logic (toggling, timing, accuracy).
+- [X] Test garlic normalization (cloves/heads -> each/ounce) with various quantities.
+- [X] Test frontend ingredient consolidation with normalized units.
 
 ## Final Deliverables
 - [ ] Complete, functional web application (*pending testing/refinement*)
@@ -61,7 +67,7 @@
 - [X] Improved UI/UX based on refresh requirements (wider layout, cards, checkboxes).
 
 ## Potential MVP+ Ideas (Optional)
-- [ ] Consolidate duplicate ingredients before sending to Instacart
+- [-] Consolidate duplicate ingredients before sending to Instacart (*Moved to Core Features*)
 - [ ] Improve UI/UX (better loading indicators, progress for multiple files)
 - [ ] More robust ingredient parsing (handling ranges, alternatives via LLM prompt tuning)
 - [ ] Basic user authentication

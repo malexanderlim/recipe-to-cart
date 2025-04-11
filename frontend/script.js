@@ -56,11 +56,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!files || files.length === 0) return;
 
         clearAllResults(); // Clear everything before processing new batch
-        setLoadingState(true, files.length); // Indicate loading for multiple files
+        // --- Initial call to setLoadingState - shows total count --- 
+        setLoadingState(true, files.length, 0); // Indicate loading, show total files
 
         processedRecipes = []; // Reset recipe data store
+        let currentFileIndex = 0; // Track progress
 
         for (const file of files) {
+            currentFileIndex++;
+            // --- Update loading state BEFORE processing the file --- 
+            setLoadingState(true, files.length, currentFileIndex);
             displayImagePreview(file); // Show preview/filename for current file being processed
             await processSingleFile(file);
         }
@@ -237,9 +242,25 @@ document.addEventListener('DOMContentLoaded', () => {
                      let displayQuantity = '';
                      if (itemData.quantity !== null && typeof itemData.quantity === 'number') {
                          const scaledValue = itemData.quantity * newScaleFactor;
-                         displayQuantity = Number(scaledValue.toFixed(2)).toString();
-                         if (displayQuantity.endsWith('.00')) { displayQuantity = displayQuantity.slice(0, -3); }
-                         else if (displayQuantity.endsWith('0')) { displayQuantity = displayQuantity.slice(0, -1); } 
+                         
+                         // Debug log for garlic items
+                         if ((itemData.ingredient || '').toLowerCase().includes('garlic')) {
+                             console.log(`YIELD CHANGE - Garlic: Original=${itemData.quantity}, Scaled=${scaledValue}`);
+                         }
+                         
+                         // Better number formatting to handle all cases
+                         // First convert to a fixed precision string
+                         const fixedString = scaledValue.toFixed(2);
+                         
+                         // Then convert to a number and back to string to remove trailing zeros properly
+                         // But make sure to preserve whole numbers correctly
+                         const num = parseFloat(fixedString);
+                         displayQuantity = Number.isInteger(num) ? num.toString() : num.toString();
+                         
+                         // Debug log for garlic items
+                         if ((itemData.ingredient || '').toLowerCase().includes('garlic')) {
+                             console.log(`YIELD CHANGE - Final garlic display: ${displayQuantity}`);
+                         }
                      }
                      const unit = itemData.unit || '';
                      const ingredient = itemData.ingredient || '';
@@ -267,18 +288,44 @@ document.addEventListener('DOMContentLoaded', () => {
         const scaleFactor = (typeof recipeData.scaleFactor === 'number' && !isNaN(recipeData.scaleFactor)) ? recipeData.scaleFactor : 1;
 
         const listItems = recipeData.ingredients.map((item, index) => {
+            // Debug logging for troubleshooting quantity issues
+            if ((item.ingredient || '').toLowerCase().includes('garlic')) {
+                console.log(`DEBUG - Garlic Rendering: Original data:`, item);
+            }
+            
             let displayQuantity = '';
             if (item.quantity !== null && typeof item.quantity === 'number') {
                 const scaledValue = item.quantity * scaleFactor;
-                // Format nicely: avoid excessive decimals, show fractions for common ones?
-                // Simple rounding for now:
-                displayQuantity = Number(scaledValue.toFixed(2)).toString();
-                if (displayQuantity.endsWith('.00')) { displayQuantity = displayQuantity.slice(0, -3); }
-                else if (displayQuantity.endsWith('0')) { displayQuantity = displayQuantity.slice(0, -1); } 
+                
+                // Debug log for garlic specifically
+                if ((item.ingredient || '').toLowerCase().includes('garlic')) {
+                    console.log(`DEBUG - Garlic Quantity: Original=${item.quantity}, Scaled=${scaledValue}`);
+                }
+                
+                // Better number formatting to handle all cases
+                // First convert to a fixed precision string
+                const fixedString = scaledValue.toFixed(2);
+                
+                // Then convert to a number and back to string to remove trailing zeros properly
+                // But make sure to preserve whole numbers correctly
+                // This approach properly handles 30.0 -> "30" and 30.5 -> "30.5"
+                const num = parseFloat(fixedString);
+                displayQuantity = Number.isInteger(num) ? num.toString() : num.toString();
+                
+                // Debug the string formatting
+                if ((item.ingredient || '').toLowerCase().includes('garlic')) {
+                    console.log(`DEBUG - Garlic display after formatting: ${displayQuantity}`);
+                }
             }
+            
             const unit = item.unit || '';
             const ingredient = item.ingredient || '';
             const text = `${displayQuantity} ${unit} ${ingredient}`.replace(/\s+/g, ' ').trim();
+            
+            // Debug final text
+            if ((item.ingredient || '').toLowerCase().includes('garlic')) {
+                console.log(`DEBUG - Final garlic text: ${text}`);
+            }
             
             // Unique ID for the checkbox and label association
             const checkboxId = `ingredient-${recipeData.id}-${index}`;
@@ -286,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const ingredientIndex = index; 
             
             // Default checked state can be stored in recipeData if needed later, for now default true
-            const isChecked = item.checked === undefined ? true : item.checked; // Add a checked state to the item data
+            const isChecked = item.checked === undefined ? true : item.checked;
 
             return `
                 <li class="ingredient-item">
@@ -360,11 +407,90 @@ document.addEventListener('DOMContentLoaded', () => {
                             finalQuantity = parseFloat((item.quantity * scaleFactor).toFixed(2));
                             if (finalQuantity <= 0 && item.quantity > 0) finalQuantity = 0.01; 
                         }
-                        hasCheckedIngredients = true; 
+                        hasCheckedIngredients = true;
+                        
+                        // Preserve any line_item_measurements if present and scale them 
+                        let line_item_measurements = null;
+                        if (item.line_item_measurements && Array.isArray(item.line_item_measurements)) {
+                            line_item_measurements = item.line_item_measurements.map(measurement => {
+                                const scaledMeasurement = parseFloat((measurement.quantity * scaleFactor).toFixed(2));
+                                // Ensure we're formatting numbers properly
+                                const formattedQuantity = Number.isInteger(scaledMeasurement) ? 
+                                    scaledMeasurement : scaledMeasurement;
+                                
+                                return {
+                                    quantity: formattedQuantity,
+                                    unit: measurement.unit
+                                };
+                            });
+                        }
+                        
+                        // Special handling for garlic cloves to ensure proper unit
+                        const isGarlic = (item.ingredient || '').toLowerCase().includes('garlic');
+                        const isCloves = (item.unit || '').toLowerCase() === 'cloves';
+                        
+                        if (isGarlic && isCloves) {
+                            console.log(`Converting garlic cloves to heads: ${finalQuantity} cloves -> ${Math.max(1, Math.ceil(finalQuantity / 10))} each (head)`);
+                            
+                            // Calculate head count based on 10 cloves = 1 head ratio
+                            const headCount = Math.max(1, Math.ceil(finalQuantity / 10));
+                            
+                            return {
+                                ingredient: item.ingredient.replace(/cloves?/i, '').replace(/,/g, '').trim() || 'Garlic',
+                                quantity: headCount,
+                                unit: 'each',
+                                display_text: `${headCount} head${headCount > 1 ? 's' : ''} garlic`,
+                                line_item_measurements: [
+                                    { quantity: headCount, unit: 'each' },
+                                    // Add weight alternatives
+                                    { quantity: parseFloat((headCount * 1.75).toFixed(2)), unit: 'oz' },
+                                    { quantity: parseFloat((headCount * 50).toFixed(2)), unit: 'g' }
+                                ]
+                            };
+                        }
+                        
+                        // Special case for herbs sold by sprigs (thyme, rosemary, etc.)
+                        const isHerb = /(thyme|rosemary|mint|sage|oregano|basil)/.test((item.ingredient || '').toLowerCase());
+                        const isSprigs = (item.unit || '').toLowerCase() === 'sprigs' || (item.unit || '').toLowerCase() === 'sprig';
+                        
+                        if (isHerb && (isSprigs || finalQuantity > 5)) {
+                            console.log(`Converting herb sprigs to bunch: ${item.ingredient}, ${finalQuantity} ${item.unit} -> 1 bunch`);
+                            
+                            return {
+                                ingredient: item.ingredient || 'Herb',
+                                quantity: 1,
+                                unit: 'bunch',
+                                line_item_measurements: [
+                                    { quantity: 1, unit: 'bunch' },
+                                    { quantity: 1, unit: 'each' }
+                                ]
+                            };
+                        }
+                        
+                        // Special case for bay leaves and similar spices sold in packages
+                        const isBayLeaves = /(bay leaf|bay leaves)/.test((item.ingredient || '').toLowerCase());
+                        const isLeaves = /(leaf|leaves)/.test((item.ingredient || '').toLowerCase()) &&
+                                        !/(lettuce|cabbage)/.test((item.ingredient || '').toLowerCase());
+                        
+                        if (isBayLeaves || isLeaves) {
+                            console.log(`Converting individual leaves to package: ${item.ingredient}, ${finalQuantity} ${item.unit} -> 1 each`);
+                            
+                            return {
+                                ingredient: item.ingredient || 'Leaves',
+                                quantity: 1,
+                                unit: 'each',
+                                line_item_measurements: [
+                                    { quantity: 1, unit: 'each' },
+                                    { quantity: 1, unit: 'package' }
+                                ]
+                            };
+                        }
+                        
                         return {
                             ingredient: item.ingredient || 'Unknown Ingredient',
                             quantity: finalQuantity,
-                            unit: item.unit || 'each' 
+                            unit: item.unit || 'each',
+                            line_item_measurements: line_item_measurements
                         };
                     });
 
@@ -377,18 +503,91 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        if (allScaledIngredients.length === 0) {
-            console.log("No ingredients selected to add to Instacart.");
+        // --- START: Ingredient Consolidation Logic ---
+        const consolidatedMap = new Map();
+
+        allScaledIngredients.forEach(item => {
+            // Normalize name and unit for reliable key generation
+            const normalizedName = (item.ingredient || '').trim().toLowerCase();
+            const normalizedUnit = (item.unit || 'each').trim().toLowerCase(); // Default to 'each' if unit is missing
+
+            if (!normalizedName) {
+                console.warn("Skipping item with empty ingredient name:", item);
+                return; // Skip if no ingredient name
+            }
+
+            const key = `${normalizedName}_${normalizedUnit}`;
+
+            if (consolidatedMap.has(key)) {
+                const existingItem = consolidatedMap.get(key);
+                existingItem.quantity += item.quantity;
+                
+                // Merge line_item_measurements if both have them
+                if (item.line_item_measurements && existingItem.line_item_measurements) {
+                    // Create a map to merge measurements by unit
+                    const measurementsMap = new Map();
+                    
+                    // Add existing measurements first
+                    existingItem.line_item_measurements.forEach(m => {
+                        measurementsMap.set(m.unit, m.quantity);
+                    });
+                    
+                    // Add new measurements, summing quantities for same units
+                    item.line_item_measurements.forEach(m => {
+                        const currentQuantity = measurementsMap.get(m.unit) || 0;
+                        measurementsMap.set(m.unit, currentQuantity + m.quantity);
+                    });
+                    
+                    // Convert back to array
+                    existingItem.line_item_measurements = Array.from(measurementsMap).map(([unit, quantity]) => {
+                        // Format the quantity properly to avoid decimal issues
+                        const formattedQuantity = parseFloat(quantity.toFixed(2));
+                        return {
+                            unit,
+                            quantity: Number.isInteger(formattedQuantity) ? formattedQuantity : formattedQuantity
+                        };
+                    });
+                } 
+                // If only one has measurements, use those
+                else if (item.line_item_measurements) {
+                    existingItem.line_item_measurements = item.line_item_measurements;
+                }
+                // Keep the first encountered non-normalized name/unit
+            } else {
+                consolidatedMap.set(key, {
+                    // Store original casing/format for API
+                    ingredient: item.ingredient,
+                    unit: item.unit || 'each', // Use original or default
+                    quantity: item.quantity,
+                    line_item_measurements: item.line_item_measurements,
+                    // Keep normalized versions for potential future use if needed
+                    normalizedName: normalizedName,
+                    normalizedUnit: normalizedUnit
+                });
+            }
+        });
+
+        // Convert Map back to array for API call
+        const finalIngredientList = Array.from(consolidatedMap.values()).map(({ ingredient, quantity, unit }) => ({
+            ingredient,
+            // Round final quantity to avoid long decimals, ensure minimum if needed
+            quantity: parseFloat(quantity.toFixed(2)) || 0.01, 
+            unit
+        }));
+        // --- END: Ingredient Consolidation Logic ---
+
+        // --- UPDATE: Use the consolidated list ---
+        if (finalIngredientList.length === 0) {
+            console.log("No ingredients selected or remaining after consolidation.");
             displayInstacartError("No ingredients selected. Check some items before creating the list.");
             setInstacartLoadingState(false);
             return;
         }
 
-        // --- FIX: Restore original title format --- 
         const listTitle = validRecipeTitles.length > 0 ? `Ingredients for ${validRecipeTitles.join(', ')}` : 'My Recipe List';
-        // --- End of FIX ---
-        
-        console.log("Final aggregated ingredients being sent:", allScaledIngredients);
+
+        // --- UPDATE: Use the consolidated list ---
+        console.log("Final consolidated ingredients being sent:", finalIngredientList);
         console.log("List Title:", listTitle);
 
         try {
@@ -397,9 +596,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 
-                    ingredients: allScaledIngredients,
-                    title: listTitle 
+                // --- UPDATE: Use the consolidated list ---
+                body: JSON.stringify({
+                    ingredients: finalIngredientList,
+                    title: listTitle
                 }),
             });
 
@@ -421,26 +621,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Updates the Create Instacart List button based on whether any recipes have ingredients
     function updateCreateListButtonState() {
-        const hasIngredients = processedRecipes.some(r => !r.error && r.ingredients.length > 0);
+        // Enable button only if there's at least one recipe with ingredients
+        const hasIngredients = processedRecipes.some(recipe => recipe.ingredients && recipe.ingredients.length > 0);
         createListButton.disabled = !hasIngredients;
-        // Also potentially disable pantry checkbox if no ingredients yet
-        if (pantryCheckbox) {
-             pantryCheckbox.disabled = !hasIngredients;
-             if (!hasIngredients) {
-                 pantryCheckbox.checked = false; // Reset if disabled
-             }
-        }
     }
 
     // Updated loading state indicator
-    function setLoadingState(isLoading, fileCount = 0) {
+    function setLoadingState(isLoading, totalFiles = 0, currentFileIndex = 0) {
+        const indicatorDiv = document.getElementById('loading-indicator');
+        const progressSpan = document.getElementById('progress-text'); // Get the span
+    
+        if (!indicatorDiv || !progressSpan) return; // Guard clause
+    
         if (isLoading) {
-            loadingIndicator.textContent = `Processing ${fileCount} image(s)...`;
-            loadingIndicator.style.display = 'block';
-            errorMessageDiv.textContent = ''; // Clear general error message
-            errorMessageDiv.style.display = 'none';
+            indicatorDiv.style.display = 'block';
+            let baseText = 'Processing images...'; 
+            let progressTextContent = '';
+    
+            // If processing multiple files and we know which one
+            if (totalFiles > 1 && currentFileIndex > 0) { 
+                baseText = 'Processing image'; 
+                progressTextContent = ` ${currentFileIndex} of ${totalFiles}...`;
+            } else if (totalFiles > 1) {
+                // Optional: Initial state before loop if desired (e.g., "Processing 3 files...")
+                 baseText = `Processing ${totalFiles} images...`;
+            }
+            
+            // Update the text node before the span, and the span itself
+            // Assumes the first child is the text node we want to change
+            if (indicatorDiv.childNodes.length > 0 && indicatorDiv.childNodes[0].nodeType === Node.TEXT_NODE) {
+                indicatorDiv.childNodes[0].nodeValue = baseText;
+            } else {
+                 // Fallback if structure changes unexpectedly
+                 indicatorDiv.textContent = baseText; // This would overwrite the span, less ideal
+                 indicatorDiv.appendChild(progressSpan); // Re-add span if fallback occurred
+            } 
+            progressSpan.textContent = progressTextContent; 
+    
         } else {
-            loadingIndicator.style.display = 'none';
+            indicatorDiv.style.display = 'none';
+            progressSpan.textContent = ''; // Clear progress text
+            // Optionally reset the base text node
+            if (indicatorDiv.childNodes.length > 0 && indicatorDiv.childNodes[0].nodeType === Node.TEXT_NODE) {
+                 indicatorDiv.childNodes[0].nodeValue = 'Processing images... ';
+            }
         }
     }
     
