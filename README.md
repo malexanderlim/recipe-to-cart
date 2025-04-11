@@ -49,23 +49,24 @@ A simple web application to extract ingredients from a recipe image and create a
 
 ## Running the Application
 
+**Note:** Before running the scripts for the first time, you might need to make them executable:
+```bash
+chmod +x start_backend.sh start_frontend.sh
+```
+
 1.  **Start the Backend Server:**
-    *   Make sure you are in the `backend` directory.
-    *   Run the server:
+    *   Open a terminal in the project root directory.
+    *   Run the backend start script:
         ```bash
-        node server.js
+        ./start_backend.sh
         ```
     *   The backend should start, typically on port 3001.
 
 2.  **Start the Frontend Server:**
-    *   Open a *new* terminal window/tab.
-    *   Navigate to the `frontend` directory:
+    *   Open a *new* terminal window/tab in the project root directory.
+    *   Run the frontend start script:
         ```bash
-        cd frontend
-        ```
-    *   Start a simple HTTP server (requires Python 3):
-        ```bash
-        python3 -m http.server 8000
+        ./start_frontend.sh
         ```
     *   The frontend server will start on port 8000.
 

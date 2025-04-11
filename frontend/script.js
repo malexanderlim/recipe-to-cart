@@ -11,6 +11,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const errorMessageDiv = document.getElementById('error-message');
     const instacartLoadingIndicator = document.getElementById('instacart-loading-indicator');
     const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
+    const resultsSection = document.getElementById('results-section'); // Get the section containing results
+    // --- Add element for Review List --- 
+    const reviewListArea = document.getElementById('review-list-area'); // Placeholder for review section
+    // ---------------------------------
 
     // Remove single yield controls - they will be per-recipe
     // const yieldControlDiv = document.getElementById('servings-control'); 
@@ -34,7 +38,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Elements related to pantry checkbox (will be created dynamically) ---
     let pantryCheckbox = null;
-    const resultsSection = document.getElementById('results-section'); // Get the section to add the checkbox
 
     // --- Add this log --- 
     console.log("Checking createListButton element before adding listener:", createListButton);
@@ -44,7 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check if the button was found before adding listener
     if (createListButton) {
         // --- Restore original listener --- 
-        createListButton.addEventListener('click', handleCreateList);
+        createListButton.addEventListener('click', handleReviewList);
+        // --- Rename button text ---
+        createListButton.textContent = 'Review Final List'; 
     } else {
         console.error("FATAL: Could not find createListButton element to attach listener!");
     }
@@ -76,7 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function processSingleFile(file) {
         const recipeId = `recipe-${recipeCounter++}`;
         const formData = new FormData();
-        formData.append('recipeImage', file);
+        formData.append('recipeImages', file);
 
         const recipeData = { 
             id: recipeId, 
@@ -237,9 +242,13 @@ document.addEventListener('DOMContentLoaded', () => {
                      let displayQuantity = '';
                      if (itemData.quantity !== null && typeof itemData.quantity === 'number') {
                          const scaledValue = itemData.quantity * newScaleFactor;
-                         displayQuantity = Number(scaledValue.toFixed(2)).toString();
-                         if (displayQuantity.endsWith('.00')) { displayQuantity = displayQuantity.slice(0, -3); }
-                         else if (displayQuantity.endsWith('0')) { displayQuantity = displayQuantity.slice(0, -1); } 
+                         displayQuantity = scaledValue.toFixed(2);
+                         if (displayQuantity.endsWith('.00')) { 
+                             displayQuantity = displayQuantity.slice(0, -3); // Remove .00
+                         } else if (displayQuantity.includes('.') && displayQuantity.endsWith('0')) {
+                             displayQuantity = displayQuantity.slice(0, -1); // Remove trailing 0 only if there's a decimal
+                         }
+                         displayQuantity = displayQuantity.toString(); 
                      }
                      const unit = itemData.unit || '';
                      const ingredient = itemData.ingredient || '';
@@ -270,11 +279,15 @@ document.addEventListener('DOMContentLoaded', () => {
             let displayQuantity = '';
             if (item.quantity !== null && typeof item.quantity === 'number') {
                 const scaledValue = item.quantity * scaleFactor;
-                // Format nicely: avoid excessive decimals, show fractions for common ones?
-                // Simple rounding for now:
-                displayQuantity = Number(scaledValue.toFixed(2)).toString();
-                if (displayQuantity.endsWith('.00')) { displayQuantity = displayQuantity.slice(0, -3); }
-                else if (displayQuantity.endsWith('0')) { displayQuantity = displayQuantity.slice(0, -1); } 
+                // Format nicely: Round to 2 decimal places, remove trailing .00, remove trailing 0 *after decimal*
+                displayQuantity = scaledValue.toFixed(2);
+                if (displayQuantity.endsWith('.00')) { 
+                    displayQuantity = displayQuantity.slice(0, -3); // Remove .00
+                } else if (displayQuantity.includes('.') && displayQuantity.endsWith('0')) {
+                    displayQuantity = displayQuantity.slice(0, -1); // Remove trailing 0 only if there's a decimal
+                }
+                // Ensure it's a string for display
+                displayQuantity = displayQuantity.toString(); 
             }
             const unit = item.unit || '';
             const ingredient = item.ingredient || '';
@@ -334,64 +347,57 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Updated handleCreateList function
-    async function handleCreateList() { 
-        console.log("Create List button clicked. Processing recipes:", processedRecipes);
-        setInstacartLoadingState(true);
-        clearInstacartResults();
+    // Renamed function: Handles getting the processed list from backend
+    async function handleReviewList() { 
+        if (!createListButton) return;
+        console.log("Review List button clicked. Processing recipes:", processedRecipes);
+
+        setReviewLoadingState(true); // New loading state for review generation
+        clearReviewAreaAndFinalLink(); // Clear previous review/link
 
         let allScaledIngredients = [];
-        const validRecipeTitles = [];
+        let validRecipeTitles = [];
 
         processedRecipes.forEach(recipeData => {
-            if (!recipeData.error && recipeData.ingredients && recipeData.ingredients.length > 0) {
+            if (!recipeData.error && recipeData.ingredients.length > 0) {
                 let hasCheckedIngredients = false;
-
                 const scaledAndFiltered = recipeData.ingredients
-                    .filter((item, index) => {
-                         const isChecked = item.checked === undefined ? true : item.checked;
-                         // console.log(`Recipe ${recipeData.id}, Ingredient ${index} (${item.ingredient}), Checked state: ${isChecked}`); // Keep log for debugging
-                         return isChecked;
-                    })
+                    // FIX: Include items where checked is undefined (default is checked)
+                    .filter(item => (item.checked === undefined || item.checked === true)) 
                     .map(item => {
-                        const scaleFactor = (typeof recipeData.scaleFactor === 'number' && !isNaN(recipeData.scaleFactor)) ? recipeData.scaleFactor : 1;
-                        let finalQuantity = 1;
-                        if (item.quantity !== null && typeof item.quantity === 'number') {
-                            finalQuantity = parseFloat((item.quantity * scaleFactor).toFixed(2));
-                            if (finalQuantity <= 0 && item.quantity > 0) finalQuantity = 0.01; 
+                        let finalQuantity = item.quantity;
+                        if (item.quantity !== null && typeof item.quantity === 'number' && recipeData.scaleFactor !== 1) {
+                            finalQuantity = parseFloat((item.quantity * recipeData.scaleFactor).toFixed(2));
+                            if (finalQuantity <= 0 && item.quantity > 0) finalQuantity = 0.01;
                         }
-                        hasCheckedIngredients = true; 
+                        hasCheckedIngredients = true;
                         return {
                             ingredient: item.ingredient || 'Unknown Ingredient',
                             quantity: finalQuantity,
-                            unit: item.unit || 'each' 
+                            unit: item.unit || 'each'
                         };
                     });
 
                 if (hasCheckedIngredients) {
-                     validRecipeTitles.push(recipeData.title || 'Untitled Recipe');
-                     allScaledIngredients = allScaledIngredients.concat(scaledAndFiltered);
+                    validRecipeTitles.push(recipeData.title || 'Untitled Recipe');
+                    allScaledIngredients = allScaledIngredients.concat(scaledAndFiltered);
                 }
-            } else {
-                 console.log(`Skipping recipe ${recipeData.id} due to error or no ingredients.`);
             }
         });
 
         if (allScaledIngredients.length === 0) {
-            console.log("No ingredients selected to add to Instacart.");
-            displayInstacartError("No ingredients selected. Check some items before creating the list.");
-            setInstacartLoadingState(false);
+            console.log("No ingredients selected to review.");
+            displayReviewError("No ingredients selected. Check some items before reviewing the list.");
+            setReviewLoadingState(false);
             return;
         }
 
-        // --- FIX: Restore original title format --- 
         const listTitle = validRecipeTitles.length > 0 ? `Ingredients for ${validRecipeTitles.join(', ')}` : 'My Recipe List';
-        // --- End of FIX ---
-        
-        console.log("Final aggregated ingredients being sent:", allScaledIngredients);
+        console.log("Final raw ingredients being sent to backend for Stage 2:", allScaledIngredients);
         console.log("List Title:", listTitle);
 
         try {
+            // Call the MODIFIED endpoint which returns the processed list
             const response = await fetch(`${backendUrl}/api/create-list`, {
                 method: 'POST',
                 headers: {
@@ -399,7 +405,139 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 body: JSON.stringify({ 
                     ingredients: allScaledIngredients,
-                    title: listTitle 
+                    title: listTitle
+                }),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.details || data.error || `Server error: ${response.statusText}`);
+            }
+
+            // *** NEW: Display the returned processed list for review ***
+            if (data.processedIngredients && data.originalTitle) {
+                displayReviewList(data.processedIngredients, data.originalTitle);
+            } else {
+                throw new Error("Backend did not return the processed ingredient list.");
+            }
+
+        } catch (error) {
+            console.error('Error getting processed list for review:', error);
+            displayReviewError(`Failed to generate list for review: ${error.message}`);
+        } finally {
+            setReviewLoadingState(false);
+        }
+    }
+
+    // --- NEW: Function to display the review list ---
+    function displayReviewList(ingredients, originalTitle) {
+        if (!reviewListArea) return;
+        reviewListArea.innerHTML = ''; // Clear previous content
+        reviewListArea.style.display = 'block'; // Make visible
+
+        const heading = document.createElement('h2'); // Use H2 for consistency
+        // Ensure correct numbering
+        heading.textContent = '3. Review Final List'; 
+        reviewListArea.appendChild(heading);
+
+        if (!ingredients || ingredients.length === 0) {
+            reviewListArea.innerHTML += '<p>No ingredients generated after consolidation.</p>';
+            return;
+        }
+
+        const list = document.createElement('ul');
+        list.classList.add('review-ingredient-list'); 
+
+        // ingredients is now expected to be [{name: ..., line_item_measurements: [{unit, quantity}, ...]}, ...]
+        ingredients.forEach((item, index) => {
+            const li = document.createElement('li');
+            li.classList.add('ingredient-item'); 
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.id = `review-ingredient-${index}`;
+            checkbox.checked = true; 
+            // Store the full item data as JSON string for reconstruction
+            checkbox.dataset.itemData = JSON.stringify(item); 
+            
+            // --- Display Primary Measurement --- 
+            let displayText = 'Error: No measurement found';
+            if (item.line_item_measurements && item.line_item_measurements.length > 0) {
+                const primaryMeasurement = item.line_item_measurements[0]; // Assume first is primary
+                displayText = ` ${primaryMeasurement.quantity} ${primaryMeasurement.unit || ''} ${item.name}`.replace(/\s+/g, ' ').trim();
+            } else {
+                displayText = ` ${item.name} (Check units/quantity)`; // Fallback
+            }
+            // ----------------------------------
+
+            const label = document.createElement('label');
+            label.htmlFor = `review-ingredient-${index}`;
+            label.textContent = displayText;
+            
+            li.appendChild(checkbox);
+            li.appendChild(label);
+            list.appendChild(li);
+        });
+
+        reviewListArea.appendChild(list);
+
+        // Add the "Send to Instacart" button
+        const sendButton = document.createElement('button');
+        sendButton.id = 'send-to-instacart-button';
+        // Change button text
+        sendButton.textContent = 'Create Instacart Shopping List'; 
+        // Apply the same class as the final link for similar styling
+        sendButton.classList.add('instacart-link-button'); 
+        sendButton.dataset.originalTitle = originalTitle; // Store title for later use
+        sendButton.addEventListener('click', handleSendToInstacart);
+        reviewListArea.appendChild(sendButton);
+    }
+
+    // --- NEW: Function to handle sending the final list ---
+    async function handleSendToInstacart(event) {
+        const sendButton = event.target;
+        const originalTitle = sendButton.dataset.originalTitle;
+        const reviewListCheckboxes = reviewListArea.querySelectorAll('.review-ingredient-list input[type="checkbox"]');
+        
+        setInstacartLoadingState(true); 
+        clearInstacartResults(); 
+
+        const finalIngredientsToSend = [];
+        reviewListCheckboxes.forEach(checkbox => {
+            if (checkbox.checked) {
+                try {
+                    // Parse the full item data stored on the checkbox
+                    const itemData = JSON.parse(checkbox.dataset.itemData); 
+                    // We need to send the structure {name, line_item_measurements}
+                    finalIngredientsToSend.push({
+                        name: itemData.name,
+                        line_item_measurements: itemData.line_item_measurements
+                    });
+                } catch (e) {
+                    console.error("Error parsing item data from checkbox:", e);
+                }
+            }
+        });
+
+        console.log("Final ingredients selected by user (with measurements):", finalIngredientsToSend);
+        
+        if (finalIngredientsToSend.length === 0) {
+             displayInstacartError("No ingredients selected to send to Instacart.");
+             setInstacartLoadingState(false);
+             return;
+        }
+
+        try {
+            // Call /api/send-to-instacart with the correct payload structure
+            const response = await fetch(`${backendUrl}/api/send-to-instacart`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                    ingredients: finalIngredientsToSend, // Contains name & line_item_measurements
+                    title: originalTitle
                 }),
             });
 
@@ -412,17 +550,55 @@ document.addEventListener('DOMContentLoaded', () => {
             displayInstacartLink(data.instacartUrl);
 
         } catch (error) {
-            console.error('Error creating Instacart list:', error);
-            displayInstacartError(`Failed to create list: ${error.message}`);
+            console.error('Error sending final list to Instacart:', error);
+            displayInstacartError(`Failed to send list to Instacart: ${error.message}`);
         } finally {
             setInstacartLoadingState(false);
         }
     }
 
-    // Updates the Create Instacart List button based on whether any recipes have ingredients
+    // --- NEW Helper functions for Review Step loading/error/clear ---
+    function setReviewLoadingState(isLoading) {
+        // Show/hide a simple text indicator within the review area
+        if (isLoading && reviewListArea) {
+            reviewListArea.innerHTML = '<p>Generating review list...</p>'; // Simple text loading
+            reviewListArea.style.display = 'block';
+        }
+        // Optionally hide if finished loading and handled by displayReviewList/displayReviewError
+        // else if (!isLoading && reviewListArea) {
+        //     reviewListArea.style.display = 'none'; // Or keep visible if content was added
+        // }
+        
+        // Disable the "Review Final List" button while processing
+        if (createListButton) { 
+            createListButton.disabled = isLoading; 
+        }
+    }
+
+    function displayReviewError(message) {
+        console.error("Review List Error:", message);
+        if (reviewListArea) {
+            // Display error directly within the review area
+            reviewListArea.innerHTML = `<p class="error">Error generating review: ${message}</p>`;
+            reviewListArea.style.display = 'block';
+        }
+    }
+
+    function clearReviewAreaAndFinalLink() {
+        if (reviewListArea) {
+            reviewListArea.innerHTML = '';
+            reviewListArea.style.display = 'none';
+        }
+         clearInstacartResults(); // Clear final link/error area too
+    }
+
+    // Updates the "Review Final List" button state 
     function updateCreateListButtonState() {
+        if (!createListButton) return; // Guard if button doesn't exist
         const hasIngredients = processedRecipes.some(r => !r.error && r.ingredients.length > 0);
+        // Enable button if there are *any* initial ingredients parsed
         createListButton.disabled = !hasIngredients;
+        
         // Also potentially disable pantry checkbox if no ingredients yet
         if (pantryCheckbox) {
              pantryCheckbox.disabled = !hasIngredients;
@@ -452,16 +628,16 @@ document.addEventListener('DOMContentLoaded', () => {
         errorMessageDiv.style.display = 'block';
     }
 
-    // New function to clear all results areas
+    // Clear all results areas (needs update for review area)
     function clearAllResults() {
         imagePreviewArea.innerHTML = '';
         recipeResultsContainer.innerHTML = ''; // Clear dynamic recipe blocks
         processedRecipes = []; // Clear stored data
         recipeCounter = 0;
-        createListButton.disabled = true;
-        errorMessageDiv.innerHTML = ''; // Clear appended error messages
+        if (createListButton) { createListButton.disabled = true; }
+        errorMessageDiv.innerHTML = ''; 
         errorMessageDiv.style.display = 'none';
-        clearInstacartResults();
+        clearReviewAreaAndFinalLink(); // Use new function
         
         // Also remove the pantry checkbox if it exists
         const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
@@ -471,12 +647,38 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- Placeholder/Unchanged functions --- 
-    function detectYield(text) { /* ... existing code ... */ }
-    function displayImagePreview(file) { /* ... existing code ... */ }
-    function setInstacartLoadingState(isLoading) { /* ... existing code ... */ }
-    function displayInstacartError(message) { /* ... existing code ... */ }
-    function clearInstacartResults() { /* ... existing code ... */ }
+    // Placeholder functions (ensure clearInstacartResults is correct)
+    function setInstacartLoadingState(isLoading) {
+        const instacartLoadingIndicator = document.getElementById('instacart-loading-indicator');
+        const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
+        const instacartLinkArea = document.getElementById('instacart-link-area');
+        // Update loading text
+        if (instacartLoadingIndicator) { 
+            instacartLoadingIndicator.textContent = isLoading ? 'Sending to Instacart...' : '';
+            instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
+        }
+        if (isLoading) {
+            if (instacartErrorMessageDiv) {
+                instacartErrorMessageDiv.textContent = '';
+                instacartErrorMessageDiv.style.display = 'none';
+            }
+            if (instacartLinkArea) {
+                 instacartLinkArea.innerHTML = ''; 
+            }
+        }
+    }
+    function displayInstacartError(message) {
+        const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
+        instacartErrorMessageDiv.textContent = message;
+        instacartErrorMessageDiv.style.display = 'block';
+    }
+    function clearInstacartResults() {
+        const instacartLinkArea = document.getElementById('instacart-link-area');
+        const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
+        instacartLinkArea.innerHTML = '';
+        instacartErrorMessageDiv.textContent = '';
+        instacartErrorMessageDiv.style.display = 'none';
+    }
     function displayInstacartLink(url) {
         // --- Remove debugging logs --- 
         // console.log("displayInstacartLink called with URL:", url);
