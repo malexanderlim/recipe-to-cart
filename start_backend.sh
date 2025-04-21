@@ -4,4 +4,5 @@
 cd backend || exit
 
 echo "Starting backend server..."
-node server.js 
+# Use --env-file flag to load the .env file
+node --env-file=.env server.js 

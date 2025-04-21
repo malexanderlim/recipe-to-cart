@@ -1,4 +1,4 @@
-require('dotenv').config({ path: './.env' }); // Explicitly point to .env
+// require('dotenv').config({ path: './.env' }); // REMOVED: Not needed on Vercel
 
 const express = require('express');
 const cors = require('cors');
