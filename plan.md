@@ -1,6 +1,6 @@
 # Demo Day Prep Plan
 
-**Goal:** Ensure the Recipe-to-Cart app is accurate, intuitive, and polished for the YC Demo Day presentation. The core functionality (recipe -> accurate cart) must be reliable.
+**Goal:** Ensure the Recipe-to-Cart app is accurate, intuitive, and polished for the Demo Day presentation. The core functionality (recipe -> accurate cart) must be reliable.
 
 ## P0: Must-Haves for Demo
 

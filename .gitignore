@@ -1,6 +1,8 @@
 # Ignore Google Cloud service account key file
 recipe-vision-sa-key.json
 *.json 
+# But DO include Vercel's config file
+!vercel.json
 
 # Ignore environment variables file
 backend/.env
