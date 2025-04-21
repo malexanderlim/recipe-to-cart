@@ -3,6 +3,16 @@
 
 cd backend || exit
 
+# Export the Google credentials JSON content as an environment variable
+# Check if the key file exists first
+KEY_FILE="../recipe-vision-sa-key.json" # Path relative to backend dir
+if [ -f "$KEY_FILE" ]; then
+  export GOOGLE_APPLICATION_CREDENTIALS=$(cat "$KEY_FILE")
+  echo "Loaded Google credentials from $KEY_FILE into environment variable."
+else
+  echo "WARNING: Google credentials file not found at $KEY_FILE. Vision API calls will likely fail."
+fi
+
 echo "Starting backend server..."
-# Use --env-file flag to load the .env file
+# Use --env-file flag to load the other .env variables
 node --env-file=.env server.js 

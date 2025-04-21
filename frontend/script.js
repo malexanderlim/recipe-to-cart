@@ -24,7 +24,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let processedRecipes = []; // Array to store data for each recipe: { id, file, title, yield, ingredients, scaleFactor, error }
     let recipeCounter = 0; // Simple ID generator
 
-    // const backendUrl = 'http://localhost:3001'; // REMOVED - Use relative paths
+    // Determine backend URL based on hostname
+    const isLocal = window.location.hostname === 'localhost' 
+                   || window.location.hostname === '127.0.0.1' 
+                   || window.location.hostname === '[::1]'; // Add check for IPv6 loopback
+    const backendUrl = isLocal ? 'http://localhost:3001' : ''; // Empty string for relative paths on deployed version
+    console.log(`Running ${isLocal ? 'locally' : 'deployed'}. Backend URL: ${backendUrl || '/'}`);
 
     // --- Define Common Pantry Item Keywords (lowercase) --- 
     const commonItemsKeywords = [
@@ -97,8 +102,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderSingleRecipeResult(recipeData, true); 
 
         try {
-            // Use relative path
-            const response = await fetch(`/api/upload`, {
+            // Use backendUrl variable
+            const response = await fetch(`${backendUrl}/api/upload`, {
                 method: 'POST',
                 body: formData,
             });
@@ -399,7 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Call the MODIFIED endpoint which returns the processed list
-            const response = await fetch(`/api/create-list`, {
+            const response = await fetch(`${backendUrl}/api/create-list`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -537,7 +542,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Call /api/send-to-instacart with the correct payload structure
-            const response = await fetch(`/api/send-to-instacart`, {
+            const response = await fetch(`${backendUrl}/api/send-to-instacart`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

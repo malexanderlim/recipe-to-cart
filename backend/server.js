@@ -207,12 +207,14 @@ Instructions:
     *   Round UP quantities for countable units ('bunch', 'can', 'head', 'each') to the nearest whole number.
     *   For fresh herbs converted to weight/volume, if the quantity is small (< ~2oz/~50g), adjust to quantity: 1, unit: 'bunch' or 'package'.
     *   Ensure other weights/volumes are practical.
-4.  **Consolidate:** Combine items with the same normalized name. For each item, output an array of the *adjusted* measurement objects ({unit, quantity}) generated in step 3. 
+4.  **Consolidate:** Combine items with the same normalized name.
+    *   If multiple entries exist for the *same* normalized item AND they use the *same* standard unit (e.g., multiple entries converted to 'oz'), sum their quantities for that unit.
+    *   If entries for the same normalized item use *different* standard units (e.g., 'cloves' vs 'heads'), DO NOT attempt to sum them across units. List their *individual* adjusted measurements separately within the \`line_item_measurements\` array for the consolidated item.
 5.  **Format Output:** Return ONLY a valid JSON array of objects. Each object MUST have keys:
-    *   "name" (string, normalized)
-    *   "line_item_measurements" (array of objects, each containing "unit" [string] and "quantity" [number] AFTER adjustments)
-    *   "original_quantity" (number)
-    *   "original_unit" (string)
+    *   "name" (string, normalized),
+    *   "line_item_measurements" (array of objects, each containing "unit" [string] and "quantity" [number] AFTER adjustments),
+    *   "original_quantity" (number), // Keep for context, might be null
+    *   "original_unit" (string) // Keep for context, might be null
     Do not include any other text.
 
 Example Input: [{"ingredient": "garlic cloves, peeled", "quantity": 30, "unit": "cloves"}]
@@ -275,53 +277,124 @@ Final Output JSON Array:
              }
              console.log("Stage 2 LLM preliminary processing successful.");
 
-            // --- START: Algorithmic Post-Processing on Measurements --- 
-            console.log("Applying algorithmic adjustments to measurements...");
-            const finalAdjustedItems = llmProcessedItems.map(item => {
-                const finalMeasurements = item.line_item_measurements.map(measurement => {
-                    let adjustedQuantity = measurement.quantity;
-                    const unit = measurement.unit.toLowerCase();
-                    const name = item.name.toLowerCase();
-                    const originalUnit = item.original_unit?.toLowerCase();
+            // --- START: Algorithmic Consolidation & Post-Processing --- 
+            console.log("Applying algorithmic consolidation and adjustments...");
+            
+            const consolidatedItems = {}; // Use an object for easier grouping by name
 
-                    const countableUnits = ['bunch', 'can', 'head', 'each'];
-                    const freshHerbs = ['basil', 'thyme', 'mint', 'parsley', 'cilantro', 'rosemary', 'dill', 'oregano'];
+            llmProcessedItems.forEach(item => {
+                const name = item.name.toLowerCase();
+                if (!consolidatedItems[name]) {
+                    consolidatedItems[name] = { 
+                        name: item.name, 
+                        measurements: [] // Store all measurements before final consolidation
+                    };
+                }
+                // Add all measurements from this item (LLM might output multiple)
+                item.line_item_measurements.forEach(measurement => {
+                    // Store original unit info if available, might be useful for consolidation rules
+                    consolidatedItems[name].measurements.push({ 
+                        unit: measurement.unit.toLowerCase(), 
+                        quantity: measurement.quantity, 
+                        original_unit: item.original_unit?.toLowerCase()
+                    });
+                });
+            });
 
-                    // Rule 1: Garlic conversion consistency (applied to 'head' unit)
-                    if (name === 'garlic' && unit === 'head' && originalUnit === 'cloves') {
-                        adjustedQuantity = Math.ceil(item.original_quantity / 10); 
-                        console.log(`Adjusted garlic head: ${item.original_quantity} cloves -> ${adjustedQuantity} head`);
+            // Now process each consolidated group
+            const finalAdjustedItems = Object.values(consolidatedItems).map(groupedItem => {
+                const name = groupedItem.name.toLowerCase();
+                let finalMeasurements = [];
+
+                // --- Specific Garlic Consolidation Logic ---
+                if (name === 'garlic') {
+                    let totalHeads = 0;
+                    let totalCloves = 0;
+                    let otherMeasurements = []; // Keep track of non-head/clove measurements like 'oz'
+
+                    groupedItem.measurements.forEach(m => {
+                        if (m.unit === 'head') {
+                            totalHeads += m.quantity;
+                        } else if (m.unit === 'cloves') {
+                            totalCloves += m.quantity;
+                        } else {
+                            otherMeasurements.push(m); // Keep oz, etc.
+                        }
+                    });
+
+                    // Convert cloves to heads (using 10 cloves/head, rounding up)
+                    const headsFromCloves = totalCloves > 0 ? Math.ceil(totalCloves / 10) : 0;
+                    const finalTotalHeads = Math.ceil(totalHeads + headsFromCloves);
+                    
+                    if (finalTotalHeads > 0) {
+                        finalMeasurements.push({ unit: 'head', quantity: finalTotalHeads });
+                        console.log(`Consolidated garlic: ${totalHeads} heads + ${totalCloves} cloves -> ${finalTotalHeads} head(s)`);
                     }
-                    // Rule 2: Fresh herb bunch/package minimum (applied to 'bunch'/'package' units)
-                    else if (freshHerbs.some(herb => name.includes(herb)) && (unit === 'bunch' || unit === 'package')) {
+                    
+                    // Add back any other measurements (like oz if provided by LLM)
+                    // Simple consolidation for oz: sum quantities if present
+                    const totalOz = otherMeasurements.filter(m => m.unit === 'oz').reduce((sum, m) => sum + m.quantity, 0);
+                    if (totalOz > 0) {
+                        finalMeasurements.push({ unit: 'oz', quantity: parseFloat(totalOz.toFixed(2)) });
+                    }
+                     // Add other non-oz, non-head, non-clove units if they existed
+                    otherMeasurements.filter(m => m.unit !== 'oz').forEach(m => finalMeasurements.push({unit: m.unit, quantity: m.quantity}));
+
+                } else {
+                    // --- General Consolidation Logic (Sum quantities for same unit) ---
+                    const unitMap = {}; // { unit: totalQuantity }
+                    groupedItem.measurements.forEach(m => {
+                        unitMap[m.unit] = (unitMap[m.unit] || 0) + m.quantity;
+                    });
+                    finalMeasurements = Object.entries(unitMap).map(([unit, quantity]) => ({ 
+                        unit, 
+                        quantity: parseFloat(quantity.toFixed(2)) // Ensure reasonable precision 
+                    }));
+                }
+                
+                 // --- Apply General Algorithmic Adjustments (like rounding up countable units) --- 
+                const countableUnits = ['bunch', 'can', 'head', 'each'];
+                const freshHerbs = ['basil', 'thyme', 'mint', 'parsley', 'cilantro', 'rosemary', 'dill', 'oregano'];
+                
+                finalMeasurements = finalMeasurements.map(measurement => {
+                    let adjustedQuantity = measurement.quantity;
+                    const unit = measurement.unit; // Already lowercase
+
+                    // Rule: Fresh herb bunch/package minimum (applied to 'bunch'/'package' units)
+                    // Note: Garlic rule is handled above
+                    if (freshHerbs.some(herb => name.includes(herb)) && (unit === 'bunch' || unit === 'package')) {
                          if (adjustedQuantity < 1) {
                              adjustedQuantity = 1;
                              console.log(`Adjusted ${name} ${unit} minimum to 1`);
                          }
-                         adjustedQuantity = Math.ceil(adjustedQuantity);
+                         adjustedQuantity = Math.ceil(adjustedQuantity); // Ensure whole number for bunch/package
                     }
-                     // Rule 3: Ensure countable units are whole numbers (round up)
+                     // Rule: Ensure countable units are whole numbers (round up)
                     else if (countableUnits.includes(unit)) {
-                         if (adjustedQuantity !== Math.ceil(adjustedQuantity)) {
+                         // Round up only if it's not already an integer
+                         if (adjustedQuantity > 0 && adjustedQuantity !== Math.ceil(adjustedQuantity)) { 
                             console.log(`Adjusted ${name} ${unit}: ${measurement.quantity} -> ${Math.ceil(adjustedQuantity)}`);
                             adjustedQuantity = Math.ceil(adjustedQuantity);
                          }
                     }
+                    
+                    // Ensure quantity is at least a small positive number if it was > 0 originally
+                    if (measurement.quantity > 0 && adjustedQuantity <= 0) {
+                        adjustedQuantity = 0.01; 
+                    }
 
                     return { unit: measurement.unit, quantity: adjustedQuantity };
                 });
+                // ---------------------------------------------------------------
 
                 // Return the final structure for the *next* step (frontend review)
                 return {
-                    name: item.name,
-                    line_item_measurements: finalMeasurements, // Pass adjusted measurements
-                    // Keep original values if needed for display/debug, but not for Instacart
-                    // original_quantity: item.original_quantity, 
-                    // original_unit: item.original_unit
+                    name: groupedItem.name, // Use the originally cased name if desired, or keep lowercase
+                    line_item_measurements: finalMeasurements, 
                 };
             });
-            console.log("Algorithmic adjustments applied. Final List for Review:", JSON.stringify(finalAdjustedItems, null, 2));
-            // --- END: Algorithmic Post-Processing ---
+            console.log("Algorithmic consolidation & adjustments applied. Final List for Review:", JSON.stringify(finalAdjustedItems, null, 2));
+            // --- END: Algorithmic Consolidation & Post-Processing --- 
 
             finalLineItems = finalAdjustedItems; // Use the adjusted list for response
 
