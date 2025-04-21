@@ -23,4 +23,9 @@ This document outlines key rules and best practices to follow during development
 5.  **Data Persistence Across UI Steps:**
     *   **Problem:** In multi-step UI interactions (e.g., parse -> review -> submit), data needed for later steps might be lost if only the displayed information is used.
     *   **Rule:** When implementing flows where intermediate steps modify or filter data, ensure the *complete data structure* required for the final action is preserved.
-    *   **Guideline:** Store necessary complex data (e.g., full objects, arrays like `line_item_measurements`) associated with UI elements (e.g., using `data-*` attributes storing JSON) if it needs to be retrieved accurately later, rather than trying to reconstruct it solely from displayed text. 
+    *   **Guideline:** Store necessary complex data (e.g., full objects, arrays like `line_item_measurements`) associated with UI elements (e.g., using `data-*` attributes storing JSON) if it needs to be retrieved accurately later, rather than trying to reconstruct it solely from displayed text.
+
+6.  **Edit Verification:**
+    *   **Problem:** Applying code edits, especially in structured files like `package.json` or configuration files, can inadvertently remove or modify unrelated but necessary lines if the edit context is imprecise.
+    *   **Rule:** Before finalizing *any* code edit, mentally (or using diff tools) verify the *exact* changes being made. Pay special attention when modifying lists (like dependencies, routes, imports) or configuration blocks to ensure only the intended additions, deletions, or modifications are occurring, and that essential existing items are not accidentally removed.
+    *   **Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit. 
