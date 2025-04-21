@@ -117,3 +117,286 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
 ---
 
 Let me know if this revised plan aligns with your vision for crushing Demo Day! 
+
+## Asynchronous Processing Technical Design Document (TDD)
+
+**1. Problem Statement:**
+
+The current synchronous `/api/upload` endpoint performs multiple time-consuming operations (HEIC conversion, Google Vision API call, Anthropic Stage 1 API call). On Vercel's Hobby plan, this frequently exceeds the 10-second execution limit, resulting in a 504 Gateway Timeout error and preventing successful recipe parsing for larger or HEIC images.
+
+**2. Goal:**
+
+Refactor the image upload and initial parsing process to run asynchronously. Provide immediate feedback to the user upon upload, perform the heavy processing in the background without time constraints interfering, and update the UI once processing is complete.
+
+**3. Proposed Solution:**
+
+Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement an asynchronous workflow with frontend polling.
+
+*   **`/api/upload`:** Becomes lightweight. Accepts the image, immediately uploads it to Vercel Blob storage, stores initial job metadata in Vercel KV, triggers a background processing function, and returns a unique `jobId` to the frontend.
+*   **Vercel Blob:** Used for temporary, accessible storage of the uploaded image buffer.
+*   **Vercel KV:** Used as a simple database to store the status (`pending`, `completed`, `failed`) and results (parsed data or error message) of each processing job, keyed by `jobId`.
+*   **`/api/process-image` (New Background Function):** A separate Vercel Function responsible for the actual processing. It retrieves job details (like the image URL in Blob storage) from KV using the `jobId`, performs HEIC conversion/Vision/Anthropic calls, and updates the job status/results in KV.
+*   **`/api/job-status` (New Endpoint):** A simple endpoint the frontend polls periodically to check the status of a job in Vercel KV using the `jobId`.
+*   **Frontend:** Initiates the upload, receives the `jobId`, displays a processing indicator, polls the `/api/job-status` endpoint, and updates the UI with results or errors upon job completion.
+
+**4. High-Level Workflow:**
+
+1.  **[Frontend]** User uploads image(s) via `index.html`.
+2.  **[Frontend `script.js`]** `handleMultipleImageUpload` calls `processSingleFile` for each image.
+3.  **[Frontend `processSingleFile`]**
+    *   Calls `POST /api/upload` with the image file data.
+    *   Displays initial "Processing..." state for the recipe card.
+4.  **[Backend `/api/upload`]**
+    *   Receives image file.
+    *   Uploads image buffer to **Vercel Blob**, gets unique URL (`blobUrl`).
+    *   Generates a unique `jobId` (e.g., using `crypto.randomUUID()`).
+    *   Stores initial job state in **Vercel KV**: `kv.set(jobId, { status: 'pending', imageUrl: blobUrl })`.
+    *   *Asynchronously* triggers the background processing function: `fetch('/api/process-image', { method: 'POST', body: JSON.stringify({ jobId }) })` (fire-and-forget, no `await`).
+    *   Returns `202 Accepted` response with `{ jobId }` to the frontend.
+5.  **[Frontend `processSingleFile`]**
+    *   Receives `{ jobId }`.
+    *   Stores `jobId` associated with the recipe card/data.
+    *   Starts polling `GET /api/job-status?jobId=<jobId>` using `setInterval`.
+6.  **[Backend `/api/process-image`]** (Triggered asynchronously)
+    *   Receives `{ jobId }` in request body.
+    *   Retrieves job data from **Vercel KV**: `kv.get(jobId)`. Gets `imageUrl`.
+    *   Downloads image from **Vercel Blob** using `imageUrl`.
+    *   Performs HEIC conversion (if needed).
+    *   Calls Google Vision API.
+    *   Calls Anthropic Stage 1 API.
+    *   **On Success:** Updates **Vercel KV**: `kv.set(jobId, { status: 'completed', result: { title, yield, ingredients, extractedText } })`.
+    *   **On Failure:** Updates **Vercel KV**: `kv.set(jobId, { status: 'failed', error: 'Error message details...' })`.
+    *   Returns `200 OK` (or appropriate status). The response body isn't critical as frontend polls status endpoint.
+7.  **[Frontend Polling Logic]**
+    *   Periodically calls `GET /api/job-status?jobId=<jobId>`.
+8.  **[Backend `/api/job-status`]**
+    *   Retrieves job data from **Vercel KV**: `kv.get(jobId)`.
+    *   Returns the retrieved data (e.g., `{ status: 'pending' }` or `{ status: 'completed', result: {...} }`).
+9.  **[Frontend Polling Logic]**
+    *   Receives status from `/api/job-status`.
+    *   If `status === 'pending'`, continues polling.
+    *   If `status === 'completed'`, clears interval, updates `recipeData` with `result`, calls `renderSingleRecipeResult`.
+    *   If `status === 'failed'`, clears interval, updates `recipeData` with `error`, calls `renderSingleRecipeResult`.
+    *   Implements max retries/timeout for polling.
+
+**5. Implementation Details & Dependencies:**
+
+*   **Backend (`package.json`):**
+    *   Add `@vercel/kv`
+    *   Add `@vercel/blob`
+    *   Ensure `node-fetch` or use built-in `fetch` (Node 18+) for triggering background function.
+    *   Ensure `crypto` is available (built-in).
+*   **Backend (`server.js`):**
+    *   Import and initialize KV and Blob clients.
+    *   Implement logic for `/api/upload`, `/api/process-image`, `/api/job-status`.
+    *   Robust error handling in `/api/process-image` to ensure KV status is updated correctly on failure.
+*   **Frontend (`script.js`):**
+    *   Implement polling mechanism (`setInterval`, `clearInterval`).
+    *   Update `processSingleFile` and UI rendering functions (`renderSingleRecipeResult`) to handle pending state and results/errors from polling.
+*   **Vercel Configuration:**
+    *   Set up Vercel KV and Blob stores via the Vercel dashboard.
+    *   Add required environment variables for KV/Blob connection strings/tokens to Vercel project settings.
+    *   Ensure `vercel.json` correctly routes the new API endpoints.
+
+**6. Trade-offs:**
+
+*   **Pros:** Solves timeout issue, more scalable, better user experience (immediate feedback).
+*   **Cons:** Increased complexity (state management, polling, background jobs), slightly higher potential cost (KV/Blob usage, more function invocations), potentially longer *total* time until user sees result (due to polling intervals).
+
+**7. Success Metrics:**
+
+*   Uploading HEIC or large images completes successfully without 504 errors.
+*   Frontend displays a "processing" state immediately after upload.
+*   Frontend UI updates correctly with parsed results or specific error messages once processing finishes.
+
+**Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit.
+
+---
+
+## Asynchronous Processing Technical Design Document (TDD)
+
+**1. Problem Statement:**
+
+The current synchronous `/api/upload` endpoint performs multiple time-consuming operations (HEIC conversion, Google Vision API call, Anthropic Stage 1 API call). On Vercel's Hobby plan, this frequently exceeds the 10-second execution limit, resulting in a 504 Gateway Timeout error and preventing successful recipe parsing for larger or HEIC images.
+
+**2. Goal:**
+
+Refactor the image upload and initial parsing process to run asynchronously. Provide immediate feedback to the user upon upload, perform the heavy processing in the background without time constraints interfering, and update the UI once processing is complete.
+
+**3. Proposed Solution:**
+
+Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement an asynchronous workflow with frontend polling.
+
+*   **`/api/upload`:** Becomes lightweight. Accepts the image, immediately uploads it to Vercel Blob storage, stores initial job metadata in Vercel KV, triggers a background processing function, and returns a unique `jobId` to the frontend.
+*   **Vercel Blob:** Used for temporary, accessible storage of the uploaded image buffer.
+*   **Vercel KV:** Used as a simple database to store the status (`pending`, `completed`, `failed`) and results (parsed data or error message) of each processing job, keyed by `jobId`.
+*   **`/api/process-image` (New Background Function):** A separate Vercel Function responsible for the actual processing. It retrieves job details (like the image URL in Blob storage) from KV using the `jobId`, performs HEIC conversion/Vision/Anthropic calls, and updates the job status/results in KV.
+*   **`/api/job-status` (New Endpoint):** A simple endpoint the frontend polls periodically to check the status of a job in Vercel KV using the `jobId`.
+*   **Frontend:** Initiates the upload, receives the `jobId`, displays a processing indicator, polls the `/api/job-status` endpoint, and updates the UI with results or errors upon job completion.
+
+**4. High-Level Workflow:**
+
+1.  **[Frontend]** User uploads image(s) via `index.html`.
+2.  **[Frontend `script.js`]** `handleMultipleImageUpload` calls `processSingleFile` for each image.
+3.  **[Frontend `processSingleFile`]**
+    *   Calls `POST /api/upload` with the image file data.
+    *   Displays initial "Processing..." state for the recipe card.
+4.  **[Backend `/api/upload`]**
+    *   Receives image file.
+    *   Uploads image buffer to **Vercel Blob**, gets unique URL (`blobUrl`).
+    *   Generates a unique `jobId` (e.g., using `crypto.randomUUID()`).
+    *   Stores initial job state in **Vercel KV**: `kv.set(jobId, { status: 'pending', imageUrl: blobUrl })`.
+    *   *Asynchronously* triggers the background processing function: `fetch('/api/process-image', { method: 'POST', body: JSON.stringify({ jobId }) })` (fire-and-forget, no `await`).
+    *   Returns `202 Accepted` response with `{ jobId }` to the frontend.
+5.  **[Frontend `processSingleFile`]**
+    *   Receives `{ jobId }`.
+    *   Stores `jobId` associated with the recipe card/data.
+    *   Starts polling `GET /api/job-status?jobId=<jobId>` using `setInterval`.
+6.  **[Backend `/api/process-image`]** (Triggered asynchronously)
+    *   Receives `{ jobId }` in request body.
+    *   Retrieves job data from **Vercel KV**: `kv.get(jobId)`. Gets `imageUrl`.
+    *   Downloads image from **Vercel Blob** using `imageUrl`.
+    *   Performs HEIC conversion (if needed).
+    *   Calls Google Vision API.
+    *   Calls Anthropic Stage 1 API.
+    *   **On Success:** Updates **Vercel KV**: `kv.set(jobId, { status: 'completed', result: { title, yield, ingredients, extractedText } })`.
+    *   **On Failure:** Updates **Vercel KV**: `kv.set(jobId, { status: 'failed', error: 'Error message details...' })`.
+    *   Returns `200 OK` (or appropriate status). The response body isn't critical as frontend polls status endpoint.
+7.  **[Frontend Polling Logic]**
+    *   Periodically calls `GET /api/job-status?jobId=<jobId>`.
+8.  **[Backend `/api/job-status`]**
+    *   Retrieves job data from **Vercel KV**: `kv.get(jobId)`.
+    *   Returns the retrieved data (e.g., `{ status: 'pending' }` or `{ status: 'completed', result: {...} }`).
+9.  **[Frontend Polling Logic]**
+    *   Receives status from `/api/job-status`.
+    *   If `status === 'pending'`, continues polling.
+    *   If `status === 'completed'`, clears interval, updates `recipeData` with `result`, calls `renderSingleRecipeResult`.
+    *   If `status === 'failed'`, clears interval, updates `recipeData` with `error`, calls `renderSingleRecipeResult`.
+    *   Implements max retries/timeout for polling.
+
+**5. Implementation Details & Dependencies:**
+
+*   **Backend (`package.json`):**
+    *   Add `@vercel/kv`
+    *   Add `@vercel/blob`
+    *   Ensure `node-fetch` or use built-in `fetch` (Node 18+) for triggering background function.
+    *   Ensure `crypto` is available (built-in).
+*   **Backend (`server.js`):**
+    *   Import and initialize KV and Blob clients.
+    *   Implement logic for `/api/upload`, `/api/process-image`, `/api/job-status`.
+    *   Robust error handling in `/api/process-image` to ensure KV status is updated correctly on failure.
+*   **Frontend (`script.js`):**
+    *   Implement polling mechanism (`setInterval`, `clearInterval`).
+    *   Update `processSingleFile` and UI rendering functions (`renderSingleRecipeResult`) to handle pending state and results/errors from polling.
+*   **Vercel Configuration:**
+    *   Set up Vercel KV and Blob stores via the Vercel dashboard.
+    *   Add required environment variables for KV/Blob connection strings/tokens to Vercel project settings.
+    *   Ensure `vercel.json` correctly routes the new API endpoints.
+
+**6. Trade-offs:**
+
+*   **Pros:** Solves timeout issue, more scalable, better user experience (immediate feedback).
+*   **Cons:** Increased complexity (state management, polling, background jobs), slightly higher potential cost (KV/Blob usage, more function invocations), potentially longer *total* time until user sees result (due to polling intervals).
+
+**7. Success Metrics:**
+
+*   Uploading HEIC or large images completes successfully without 504 errors.
+*   Frontend displays a "processing" state immediately after upload.
+*   Frontend UI updates correctly with parsed results or specific error messages once processing finishes.
+
+**Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit.
+
+---
+
+## Asynchronous Processing Technical Design Document (TDD)
+
+**1. Problem Statement:**
+
+The current synchronous `/api/upload` endpoint performs multiple time-consuming operations (HEIC conversion, Google Vision API call, Anthropic Stage 1 API call). On Vercel's Hobby plan, this frequently exceeds the 10-second execution limit, resulting in a 504 Gateway Timeout error and preventing successful recipe parsing for larger or HEIC images.
+
+**2. Goal:**
+
+Refactor the image upload and initial parsing process to run asynchronously. Provide immediate feedback to the user upon upload, perform the heavy processing in the background without time constraints interfering, and update the UI once processing is complete.
+
+**3. Proposed Solution:**
+
+Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement an asynchronous workflow with frontend polling.
+
+*   **`/api/upload`:** Becomes lightweight. Accepts the image, immediately uploads it to Vercel Blob storage, stores initial job metadata in Vercel KV, triggers a background processing function, and returns a unique `jobId` to the frontend.
+*   **Vercel Blob:** Used for temporary, accessible storage of the uploaded image buffer.
+*   **Vercel KV:** Used as a simple database to store the status (`pending`, `completed`, `failed`) and results (parsed data or error message) of each processing job, keyed by `jobId`.
+*   **`/api/process-image` (New Background Function):** A separate Vercel Function responsible for the actual processing. It retrieves job details (like the image URL in Blob storage) from KV using the `jobId`, performs HEIC conversion/Vision/Anthropic calls, and updates the job status/results in KV.
+*   **`/api/job-status` (New Endpoint):** A simple endpoint the frontend polls periodically to check the status of a job in Vercel KV using the `jobId`.
+*   **Frontend:** Initiates the upload, receives the `jobId`, displays a processing indicator, polls the `/api/job-status` endpoint, and updates the UI with results or errors upon job completion.
+
+**4. High-Level Workflow:**
+
+1.  **[Frontend]** User uploads image(s) via `index.html`.
+2.  **[Frontend `script.js`]** `handleMultipleImageUpload` calls `processSingleFile` for each image.
+3.  **[Frontend `processSingleFile`]**
+    *   Calls `POST /api/upload` with the image file data.
+    *   Displays initial "Processing..." state for the recipe card.
+4.  **[Backend `/api/upload`]**
+    *   Receives image file.
+    *   Uploads image buffer to **Vercel Blob**, gets unique URL (`blobUrl`).
+    *   Generates a unique `jobId` (e.g., using `crypto.randomUUID()`).
+    *   Stores initial job state in **Vercel KV**: `kv.set(jobId, { status: 'pending', imageUrl: blobUrl })`.
+    *   *Asynchronously* triggers the background processing function: `fetch('/api/process-image', { method: 'POST', body: JSON.stringify({ jobId }) })` (fire-and-forget, no `await`).
+    *   Returns `202 Accepted` response with `{ jobId }` to the frontend.
+5.  **[Frontend `processSingleFile`]**
+    *   Receives `{ jobId }`.
+    *   Stores `jobId` associated with the recipe card/data.
+    *   Starts polling `GET /api/job-status?jobId=<jobId>` using `setInterval`.
+6.  **[Backend `/api/process-image`]** (Triggered asynchronously)
+    *   Receives `{ jobId }` in request body.
+    *   Retrieves job data from **Vercel KV**: `kv.get(jobId)`. Gets `imageUrl`.
+    *   Downloads image from **Vercel Blob** using `imageUrl`.
+    *   Performs HEIC conversion (if needed).
+    *   Calls Google Vision API.
+    *   Calls Anthropic Stage 1 API.
+    *   **On Success:** Updates **Vercel KV**: `kv.set(jobId, { status: 'completed', result: { title, yield, ingredients, extractedText } })`.
+    *   **On Failure:** Updates **Vercel KV**: `kv.set(jobId, { status: 'failed', error: 'Error message details...' })`.
+    *   Returns `200 OK` (or appropriate status). The response body isn't critical as frontend polls status endpoint.
+7.  **[Frontend Polling Logic]**
+    *   Periodically calls `GET /api/job-status?jobId=<jobId>`.
+8.  **[Backend `/api/job-status`]**
+    *   Retrieves job data from **Vercel KV**: `kv.get(jobId)`.
+    *   Returns the retrieved data (e.g., `{ status: 'pending' }` or `{ status: 'completed', result: {...} }`).
+9.  **[Frontend Polling Logic]**
+    *   Receives status from `/api/job-status`.
+    *   If `status === 'pending'`, continues polling.
+    *   If `status === 'completed'`, clears interval, updates `recipeData` with `result`, calls `renderSingleRecipeResult`.
+    *   If `status === 'failed'`, clears interval, updates `recipeData` with `error`, calls `renderSingleRecipeResult`.
+    *   Implements max retries/timeout for polling.
+
+**5. Implementation Details & Dependencies:**
+
+*   **Backend (`package.json`):**
+    *   Add `@vercel/kv`
+    *   Add `@vercel/blob`
+    *   Ensure `node-fetch` or use built-in `fetch` (Node 18+) for triggering background function.
+    *   Ensure `crypto` is available (built-in).
+*   **Backend (`server.js`):**
+    *   Import and initialize KV and Blob clients.
+    *   Implement logic for `/api/upload`, `/api/process-image`, `/api/job-status`.
+    *   Robust error handling in `/api/process-image` to ensure KV status is updated correctly on failure.
+*   **Frontend (`script.js`):**
+    *   Implement polling mechanism (`setInterval`, `clearInterval`).
+    *   Update `processSingleFile` and UI rendering functions (`renderSingleRecipeResult`) to handle pending state and results/errors from polling.
+*   **Vercel Configuration:**
+    *   Set up Vercel KV and Blob stores via the Vercel dashboard.
+    *   Add required environment variables for KV/Blob connection strings/tokens to Vercel project settings.
+    *   Ensure `vercel.json` correctly routes the new API endpoints.
+
+**6. Trade-offs:**
+
+*   **Pros:** Solves timeout issue, more scalable, better user experience (immediate feedback).
+*   **Cons:** Increased complexity (state management, polling, background jobs), slightly higher potential cost (KV/Blob usage, more function invocations), potentially longer *total* time until user sees result (due to polling intervals).
+
+**7. Success Metrics:**
+
+*   Uploading HEIC or large images completes successfully without 504 errors.
+*   Frontend displays a "processing" state immediately after upload.
+*   Frontend UI updates correctly with parsed results or specific error messages once processing finishes.
+
+**Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit. 
