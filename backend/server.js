@@ -233,16 +233,28 @@ Final Output JSON Array:
             if (!Array.isArray(llmProcessedItems)) {
                  throw new Error("Parsed response is not an array.");
             }
-            // Check for required keys from LLM
+            // Check for required keys from LLM, allowing null for original quantity
             if (llmProcessedItems.length > 0 && llmProcessedItems.some(item => 
                  typeof item.name !== 'string' || 
                  !Array.isArray(item.line_item_measurements) || 
                  item.line_item_measurements.length === 0 ||
                  item.line_item_measurements.some(m => typeof m.unit !== 'string' || typeof m.quantity !== 'number') ||
-                 typeof item.original_quantity !== 'number' ||
-                 typeof item.original_unit !== 'string' // Allow null
+                 // FIX: Allow original_quantity to be null
+                 (item.original_quantity !== null && typeof item.original_quantity !== 'number') ||
+                 // Allow original_unit to be null as well (Stage 1 might return null)
+                 (item.original_unit !== null && typeof item.original_unit !== 'string') 
              )) { 
-                 throw new Error("Parsed array items missing required keys or have incorrect structure (name, line_item_measurements: [{unit, quantity}], original_quantity, original_unit).");
+                 // Log the specific item causing the validation failure for easier debugging
+                 const failingItem = llmProcessedItems.find(item => 
+                    typeof item.name !== 'string' || 
+                    !Array.isArray(item.line_item_measurements) || 
+                    item.line_item_measurements.length === 0 ||
+                    item.line_item_measurements.some(m => typeof m.unit !== 'string' || typeof m.quantity !== 'number') ||
+                    (item.original_quantity !== null && typeof item.original_quantity !== 'number') ||
+                    (item.original_unit !== null && typeof item.original_unit !== 'string')
+                 );
+                 console.error("Validation failed for item:", JSON.stringify(failingItem, null, 2));
+                 throw new Error(`Parsed array items missing required keys or have incorrect structure. Check item: ${JSON.stringify(failingItem)}`);
              }
              console.log("Stage 2 LLM preliminary processing successful.");
 

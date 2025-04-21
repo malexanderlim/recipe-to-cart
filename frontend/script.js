@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let processedRecipes = []; // Array to store data for each recipe: { id, file, title, yield, ingredients, scaleFactor, error }
     let recipeCounter = 0; // Simple ID generator
 
-    const backendUrl = 'http://localhost:3001'; // Adjust if necessary
+    // const backendUrl = 'http://localhost:3001'; // REMOVED - Use relative paths
 
     // --- Define Common Pantry Item Keywords (lowercase) --- 
     const commonItemsKeywords = [
@@ -97,7 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderSingleRecipeResult(recipeData, true); 
 
         try {
-            const response = await fetch(`${backendUrl}/api/upload`, {
+            // Use relative path
+            const response = await fetch(`/api/upload`, {
                 method: 'POST',
                 body: formData,
             });
@@ -398,7 +399,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Call the MODIFIED endpoint which returns the processed list
-            const response = await fetch(`${backendUrl}/api/create-list`, {
+            const response = await fetch(`/api/create-list`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -440,6 +441,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // Ensure correct numbering
         heading.textContent = '3. Review Final List'; 
         reviewListArea.appendChild(heading);
+
+        // Add helper text for review section
+        const reviewHelper = document.createElement('p');
+        reviewHelper.classList.add('helper-text');
+        reviewHelper.textContent = 'This is the final list after processing and combining items. Uncheck any items you don\'t want before creating the list.';
+        reviewListArea.appendChild(reviewHelper);
 
         if (!ingredients || ingredients.length === 0) {
             reviewListArea.innerHTML += '<p>No ingredients generated after consolidation.</p>';
@@ -530,7 +537,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Call /api/send-to-instacart with the correct payload structure
-            const response = await fetch(`${backendUrl}/api/send-to-instacart`, {
+            const response = await fetch(`/api/send-to-instacart`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -686,7 +693,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // if (!instacartLinkArea) { ... } // Keep check?
         // console.log("Found instacartLinkArea element:", instacartLinkArea);
         
-        instacartLinkArea.innerHTML = ''; // Clear previous links
+        instacartLinkArea.innerHTML = ''; // Clear previous links/messages
+
+        // Add success message
+        const successMsg = document.createElement('p');
+        successMsg.textContent = 'Success! Your list is ready on Instacart:';
+        successMsg.style.marginBottom = '10px'; // Add some space
+        instacartLinkArea.appendChild(successMsg);
+
         const link = document.createElement('a');
         link.href = url;
         link.textContent = 'Open Instacart Shopping List';
@@ -716,12 +730,18 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const label = document.createElement('label');
         label.htmlFor = 'pantry-items-checkbox';
-        label.textContent = ' I have commonly found pantry items (salt, pepper, oil, sugar)';
+        label.textContent = ' I have commonly found pantry items'; // Shorter label
         label.style.cursor = 'pointer';
         label.style.userSelect = 'none';
 
+        // Add helper text span
+        const helperSpan = document.createElement('span');
+        helperSpan.classList.add('helper-text');
+        helperSpan.textContent = ' (salt, pepper, oil, sugar, etc. - quickly unchecks these)';
+
         containerDiv.appendChild(pantryCheckbox);
         containerDiv.appendChild(label);
+        containerDiv.appendChild(helperSpan); // Add helper text after label
 
         // Insert before the recipe results container
         resultsSection.insertBefore(containerDiv, recipeResultsContainer); 

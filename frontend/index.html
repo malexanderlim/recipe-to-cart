@@ -13,11 +13,14 @@
         <section id="upload-section">
             <h2>1. Upload Recipe Image(s)</h2>
             <input type="file" id="recipe-image-upload" name="recipe-image-upload" accept="image/*" multiple>
+            <p class="helper-text">(Supports JPG, PNG, HEIC, etc. Select one or more files.)</p>
             <div id="image-preview-area"></div>
         </section>
 
         <section id="results-section">
             <h2>2. Extracted Recipes</h2>
+            <p class="helper-text">(Adjust yield and uncheck items you already have before reviewing.)</p>
+            <!-- Pantry checkbox added dynamically here -->
             <div id="recipe-results-container"></div>
             
             <div id="loading-indicator" class="loading" style="display: none;">Processing images...</div>

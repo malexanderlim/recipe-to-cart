@@ -16,15 +16,15 @@ These issues directly impact the core value proposition or the demo user experie
     *   **Action (Herbs):** How did `1 tsp dried oregano` become `1 bunch`? Check LLM output and backend logic. Ensure "dried" is preserved and influences normalization (perhaps map to `oz` or `package` instead of `bunch`?). Re-evaluate `tsp`/`tbsp`/`sprigs` -> `bunch`/`package` - needs to be more nuanced.
     *   **Action (Wine):** Clarify "dry white wine" to something less ambiguous like "white table wine" or "Sauvignon Blanc" if identifiable, to avoid matching with "cooking wine".
     *   **Action (Leverage Instacart Units):** Based on [Instacart API Docs](https://docs.instacart.com/developer_platform_api/api/units_of_measurement), explore using the `Measurement` array for ambiguous items. If unsure if a vendor uses `each` vs `oz` for garlic, potentially send `[{"unit": "each", "quantity": 1}, {"unit": "oz", "quantity": 4}]` (example values) to increase match likelihood. This needs careful implementation based on common conversions.
-*   **[X] Fix Instacart API 401 Error:** ... (details)
+*   **[X] Fix Instacart API 401 Error:** ...
 *   **[X] Implement Two-Stage LLM Processing + Hybrid Adjustment:** 
-    *   **Strategy:** Combined LLM (Stage 1: Extraction, Stage 2: Preliminary Normalization/Consolidation) with backend algorithmic adjustments for reliable quantity/unit constraints. **Refined to output `line_item_measurements` array based on testing.**
+    *   Strategy: Combined LLM (Stage 1: Extraction, Stage 2: Normalization + Multi-Unit Generation) with backend algorithmic adjustments. **(DONE)**
     *   Stage 1 (Backend `/api/upload`): LLM extracts structured data ...
-    *   Stage 2 (Backend `/api/create-list`): LLM normalizes/consolidates, generates `line_item_measurements` array (with primary + alternative units where applicable), returns calculated values + original context. Backend code applies final adjustments within the measurements array. **(NEEDS UPDATE)**
+    *   Stage 2 (Backend `/api/create-list`): LLM generates `line_item_measurements`. Backend code applies final adjustments. **(DONE)**
 *   **[X] Implement Final List Review Step (P0/P1):**
-    *   **Goal:** Allow users to review the final adjusted list and deselect items.
-    *   **Backend Action:** `/api/create-list` returns adjusted list (now with `line_item_measurements`). `/api/send-to-instacart` calls Instacart API (accepting `line_item_measurements`). **(NEEDS UPDATE for send endpoint)**
-    *   **Frontend Action:** UI displays review list (showing primary measurement), handles new buttons/API calls. **(NEEDS UPDATE for display logic)**
+    *   Goal: Allow users to review the final adjusted list and deselect items.
+    *   Backend Action: `/api/create-list` returns adjusted list with `line_item_measurements`. `/api/send-to-instacart` accepts this structure. **(DONE)**
+    *   Frontend Action: UI displays primary measurement, stores full data, handles correct submission. **(DONE)**
 *   **[ ] Enhance Action Feedback & Loading/Progress:**
     *   **Problem:** Basic loading indicators and lack of clear feedback on button clicks.
     *   **Action:**
@@ -56,6 +56,38 @@ Valuable but not essential for the demo.
     *   **Idea:** Automatically compare generated list items against the final Instacart page for accuracy scoring.
     *   **Action:** Defer for post-demo.
 
+## Deployment to Vercel
+
+Steps to deploy the application to Vercel for Demo Day accessibility.
+
+1.  **[ ] Project Structure Check:**
+    *   Confirm directory layout (e.g., `frontend/`, `backend/`).
+    *   Verify `package.json` in relevant directories.
+2.  **[ ] Backend Configuration (`backend/server.js`):**
+    *   Ensure server export is Vercel-compatible (e.g., standard Node HTTP server or Express).
+    *   Check all dependencies are in `backend/package.json`.
+    *   Configure CORS if needed (likely required).
+3.  **[ ] Frontend Configuration (`frontend/script.js`):**
+    *   Update API calls to use relative paths (e.g., `/api/upload`) instead of `localhost`.
+    *   Ensure HTML links correctly to JS/CSS.
+4.  **[ ] Vercel Configuration (`vercel.json`):**
+    *   Create `vercel.json` in the project root.
+    *   Define `builds` for the backend (`@vercel/node`).
+    *   Define `routes` to serve frontend static files and route `/api/*` to the backend function.
+5.  **[ ] Environment Variables:**
+    *   Identify required secrets (API keys, etc.).
+    *   Add them via the Vercel project dashboard (do *not* commit to Git).
+6.  **[ ] Deployment Process:**
+    *   Push code to Git (GitHub/GitLab/Bitbucket).
+    *   Create Vercel project linked to the Git repo.
+    *   Configure Root Directory/Build settings if needed.
+    *   Add Environment Variables in Vercel UI.
+    *   Trigger deployment.
+7.  **[ ] Testing and Iteration:**
+    *   Test the `*.vercel.app` deployment URL end-to-end.
+    *   Check API calls, Instacart integration, error handling.
+    *   Use Vercel logs for debugging.
+
 ## Testing Strategy & Evals
 
 *   **[ ] Define Test Set:** Create a small (5-10) but diverse set of recipe images (different formats, cuisines, unit types, complexity, items needing consolidation). Include edge cases (low quality image, non-recipe image).
@@ -75,10 +107,10 @@ Valuable but not essential for the demo.
 
 **Execution Plan:**
 
-1.  **Backend Refactor (Multi-Unit):** Modify Stage 2 LLM prompt and post-processing in `/api/create-list` to generate/handle `line_item_measurements`. Verify `/api/send-to-instacart` structure.
-2.  **Frontend Update (Multi-Unit):** Adjust `displayReviewList` to show primary measurement. Verify `handleSendToInstacart` sends the correct structure.
+1.  ~~Backend Refactor (Multi-Unit): Modify Stage 2 LLM prompt and post-processing...~~ (DONE)
+2.  ~~Frontend Update (Multi-Unit): Adjust `displayReviewList`, `handleSendToInstacart`...~~ (DONE)
 3.  **Enhance Frontend Feedback:** Improve loading indicators/error handling.
-4.  **Test & Refine:** Test full flow with multi-unit logic.
+4.  **Test & Refine:** Test full flow, including edge cases, review step, deselection, prompt accuracy.
 5.  **Address P1:** Polish layout.
 6.  **Final Demo Run-through.**
 
