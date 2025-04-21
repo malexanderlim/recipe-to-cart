@@ -28,8 +28,22 @@ const upload = multer({ storage: storage });
 // ------------------
 
 // --- Google Cloud Setup ---
-// Assume existing Google Cloud setup using ADC or GOOGLE_APPLICATION_CREDENTIALS
-const visionClient = new ImageAnnotatorClient();
+let visionClient;
+try {
+  const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!credentialsJson) {
+    throw new Error('GOOGLE_APPLICATION_CREDENTIALS environment variable is not set.');
+  }
+  const credentials = JSON.parse(credentialsJson);
+  // Explicitly pass credentials to the client constructor
+  visionClient = new ImageAnnotatorClient({ credentials });
+  console.log('Successfully initialized Google Cloud Vision client with provided credentials.');
+} catch (error) {
+  console.error('Failed to initialize Google Cloud Vision client:', error);
+  // Decide how to handle this - maybe exit or prevent API calls?
+  // For now, we log the error. Subsequent calls using visionClient will likely fail.
+  visionClient = null; // Ensure it's null if init failed
+}
 // ------------------------
 
 
@@ -98,6 +112,9 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
     try {
         // --- Google Cloud Vision API Call ---
         console.log('Calling Google Cloud Vision API...');
+        if (!visionClient) {
+           throw new Error('Vision client failed to initialize. Cannot call Vision API.');
+        }
         const [result] = await visionClient.textDetection({
             image: { content: imageBuffer },
         });
