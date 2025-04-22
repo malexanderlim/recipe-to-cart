@@ -34,6 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Define Polling Constants --- 
     const POLLING_INTERVAL = 3000; // Milliseconds (e.g., 3 seconds)
     const MAX_POLLING_ATTEMPTS = 40; // e.g., 40 attempts * 3s = 120s timeout
+    const POLLING_TIMEOUT_MS = 20000; // 20 seconds overall timeout for processing
 
     // --- Define Common Pantry Item Keywords (lowercase) --- 
     const commonItemsKeywords = [
@@ -100,7 +101,9 @@ document.addEventListener('DOMContentLoaded', () => {
             error: null, 
             jobId: null, // Added
             pollingIntervalId: null, // Added
-            pollingAttempts: 0 // Added
+            pollingAttempts: 0, // Added
+            pollingTimeoutId: null, // Added for overall timeout
+            lastKnownStatus: null // Added to track status for timeout message
         };
         processedRecipes.push(recipeData);
         // Render initial placeholder with loading state
@@ -127,7 +130,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     recipeData.pollingAttempts = 0; // Initialize polling counter
                     console.log(`[Recipe ${recipeId}] Upload accepted. Job ID: ${jobId}. Starting polling.`);
                     // Update UI to show 'Processing...'
-                    renderSingleRecipeResult(recipeData, true, 'Processing image...');
+                    renderSingleRecipeResult(recipeData, true, 'Uploading image...'); // Initial status
                     // Start polling
                     startPollingJobStatus(recipeId, jobId);
                 } else {
@@ -152,7 +155,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Renders the UI block for a single recipe
     // Modified to accept loading message
-    function renderSingleRecipeResult(recipeData, isLoading = false, loadingMessage = 'Processing...') {
+    function renderSingleRecipeResult(recipeData, isLoading = false, loadingMessage = 'Processing...', internalStatus = null) {
+        // --- Status Mapping ---
+        let displayStatus = loadingMessage;
+        if (isLoading) {
+            switch (internalStatus) {
+                case 'pending':
+                    displayStatus = 'Processing image...';
+                    break;
+                case 'vision_completed':
+                    displayStatus = 'Analyzing ingredients...';
+                    break;
+                default:
+                    displayStatus = loadingMessage; // Fallback (e.g., 'Uploading...')
+            }
+        }
         let recipeDiv = document.getElementById(recipeData.id);
         if (!recipeDiv) {
             recipeDiv = document.createElement('div');
@@ -186,7 +203,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Generate ingredients HTML string directly
-        let ingredientsHTML = `<p>${loadingMessage}</p>`; // Use loading message
+        let ingredientsHTML = `<p>${displayStatus}</p>`; // Use mapped display status
         if (!isLoading) {
             if (recipeData.error) {
                 ingredientsHTML = `<p class="error">${recipeData.error}</p>`; // Use error class
@@ -821,15 +838,33 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Clear any existing interval for this recipe (safety measure)
-        if (recipeData.pollingIntervalId) {
-            clearInterval(recipeData.pollingIntervalId);
-        }
+        // Clear any previous intervals/timeouts for this recipe
+        if (recipeData.pollingIntervalId) clearInterval(recipeData.pollingIntervalId);
+        if (recipeData.pollingTimeoutId) clearTimeout(recipeData.pollingTimeoutId);
 
-        console.log(`[Polling ${jobId}] Starting polling interval for recipe ${recipeId}`);
+        recipeData.pollingAttempts = 0; // Reset attempts counter
+
+        // Initial immediate check
+        pollJobStatus(recipeId, jobId);
+
+        // Set up polling interval
         recipeData.pollingIntervalId = setInterval(() => {
             pollJobStatus(recipeId, jobId);
         }, POLLING_INTERVAL);
+
+        // Set up overall timeout (e.g., 20 seconds)
+        recipeData.pollingTimeoutId = setTimeout(() => {
+            console.warn(`[Recipe ${recipeId}] Polling timed out after ${POLLING_TIMEOUT_MS}ms.`);
+            clearInterval(recipeData.pollingIntervalId); // Stop polling
+            // Set error message based on last known status
+            if (recipeData.lastKnownStatus === 'vision_completed') {
+                recipeData.error = 'Recipe analysis timed out. Please try again.';
+            } else {
+                recipeData.error = 'Processing timed out. Please try again.';
+            }
+            renderSingleRecipeResult(recipeData, false); // Render error state
+            updateCreateListButtonState();
+        }, POLLING_TIMEOUT_MS);
     }
 
     // --- NEW: Function to poll status --- 
@@ -844,10 +879,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         recipeData.pollingAttempts += 1;
-        console.log(`[Polling ${jobId}] Attempt ${recipeData.pollingAttempts}/${MAX_POLLING_ATTEMPTS} for recipe ${recipeId}`);
+        console.log(`[Recipe ${recipeId}] Polling attempt ${recipeData.pollingAttempts} for job ${jobId}...`);
 
         if (recipeData.pollingAttempts > MAX_POLLING_ATTEMPTS) {
-            console.warn(`[Polling ${jobId}] Max polling attempts reached for recipe ${recipeId}. Stopping polling.`);
+            console.warn(`[Recipe ${recipeId}] Max polling attempts reached for recipe ${recipeId}. Stopping polling.`);
             clearInterval(recipeData.pollingIntervalId);
             recipeData.pollingIntervalId = null;
             recipeData.error = 'Processing timed out. Please try again.';
@@ -860,58 +895,62 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(`${backendUrl}/api/job-status?jobId=${jobId}`);
             const data = await response.json();
 
-            console.log(`[Polling ${jobId}] Received status: ${data.status}`);
+            console.log(`[Recipe ${recipeId}] Job Status Response:`, JSON.stringify(data));
 
-            switch (data.status) {
-                case 'completed':
-                    clearInterval(recipeData.pollingIntervalId);
-                    recipeData.pollingIntervalId = null;
-                    console.log(`[Polling ${jobId}] Job completed successfully for recipe ${recipeId}.`);
-                    // Update recipeData with results from the job
-                    recipeData.title = data.result.title || recipeData.file.name;
-                    recipeData.yield = data.result.yield || null;
-                    recipeData.ingredients = data.result.ingredients || [];
-                    recipeData.extractedText = data.result.extractedText;
-                    recipeData.scaleFactor = 1; // Reset scale factor
-                    recipeData.error = null; // Clear any previous error
-                    renderSingleRecipeResult(recipeData, false); // Render final result
-                    updateCreateListButtonState();
-                    break;
-                case 'failed':
-                    clearInterval(recipeData.pollingIntervalId);
-                    recipeData.pollingIntervalId = null;
-                    console.error(`[Polling ${jobId}] Job failed for recipe ${recipeId}. Error: ${data.error}`);
-                    recipeData.error = `Processing Failed: ${data.error || 'Unknown error'}`;
-                    renderSingleRecipeResult(recipeData, false); // Render error state
-                    updateCreateListButtonState();
-                    break;
-                case 'pending':
-                    // Update UI with slightly more informative pending message? (Optional)
-                    renderSingleRecipeResult(recipeData, true, `Processing... (Attempt ${recipeData.pollingAttempts})`);
-                    // Continue polling...
-                    break;
-                case 'not_found':
-                    clearInterval(recipeData.pollingIntervalId);
-                    recipeData.pollingIntervalId = null;
-                    console.error(`[Polling ${jobId}] Job not found for recipe ${recipeId}.`);
-                    recipeData.error = 'Processing job not found. It might have expired or failed to start.';
-                    renderSingleRecipeResult(recipeData, false); // Render error state
-                    updateCreateListButtonState();
-                    break;
-                default:
-                    // Unexpected status
-                    console.warn(`[Polling ${jobId}] Received unexpected status '${data.status}' for recipe ${recipeId}.`);
-                    // Optionally continue polling a few more times or treat as failure
-                    // For now, treat as pending to avoid premature failure
-                    renderSingleRecipeResult(recipeData, true, `Processing... (Status: ${data.status})`);
-                    break;
+            recipeData.lastKnownStatus = data.status; // Update last known status
+
+            // --- Update UI based on specific status --- 
+            renderSingleRecipeResult(recipeData, true, `Processing...`, data.status);
+
+            if (data.status === 'completed') {
+                console.log(`[Recipe ${recipeId}] Job completed successfully.`);
+                stopPolling(recipeId); // Stop polling and timeout
+                // Update recipe data with results
+                recipeData.title = data.result.title || recipeData.file.name;
+                recipeData.yield = data.result.yield || null;
+                recipeData.ingredients = data.result.ingredients || [];
+                recipeData.extractedText = data.result.extractedText;
+                recipeData.scaleFactor = 1; // Reset scale factor
+                recipeData.error = null; // Clear any previous error
+                renderSingleRecipeResult(recipeData, false); // Render final result
+                updateCreateListButtonState();
+            } else if (data.status === 'failed') {
+                console.error(`[Recipe ${recipeId}] Job failed. Reason:`, data.error);
+                stopPolling(recipeId); // Stop polling and timeout
+                recipeData.error = data.error || 'Processing failed.'; // Store the error
+                // Re-render the card to show the error
+                renderSingleRecipeResult(recipeData, false);
+            } else if (data.status === 'pending' || data.status === 'vision_completed') {
+                // Continue polling, check max attempts
+                // DO NOT render final state here - handled by timeout or next successful poll
+            } else if (data.status === 'not_found') {
+                console.error(`[Recipe ${recipeId}] Job ID ${jobId} not found. Stopping polling.`);
+                stopPolling(recipeId, 'Processing job data lost. Please try again.');
+            } else {
+                // Unexpected status
+                console.warn(`[Recipe ${recipeId}] Received unexpected status '${data.status}' for recipe ${recipeId}.`);
+                // Optionally continue polling a few more times or treat as failure
+                // For now, treat as pending to avoid premature failure
+                renderSingleRecipeResult(recipeData, true, `Processing... (Status: ${data.status})`);
             }
         } catch (error) {
-            console.error(`[Polling ${jobId}] Error fetching job status for recipe ${recipeId}:`, error);
-            // Potentially stop polling after a few network errors?
-            // For now, just log and let the max attempts handle it.
-            // You could update the UI to show a temporary network issue message.
-            renderSingleRecipeResult(recipeData, true, `Polling Error... (Attempt ${recipeData.pollingAttempts})`);
+            console.error(`[Recipe ${recipeId}] Error during polling:`, error);
+            stopPolling(recipeId, `Error during polling: ${error.message}`);
+        }
+    }
+
+    // Helper function to stop polling and clear timeout
+    function stopPolling(recipeId, errorMessage = null) {
+        const recipeData = processedRecipes.find(r => r.id === recipeId);
+        if (!recipeData) return;
+        if (recipeData.pollingIntervalId) clearInterval(recipeData.pollingIntervalId);
+        if (recipeData.pollingTimeoutId) clearTimeout(recipeData.pollingTimeoutId);
+        recipeData.pollingIntervalId = null;
+        recipeData.pollingTimeoutId = null;
+        if (errorMessage) {
+             recipeData.error = errorMessage;
+             // Optional: Re-render immediately to show the error if needed
+             // renderSingleRecipeResult(recipeData, false); 
         }
     }
 
