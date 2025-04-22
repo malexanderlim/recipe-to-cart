@@ -14,5 +14,5 @@ else
 fi
 
 echo "Starting backend server..."
-# Use --env-file flag to load the other .env variables
-node --env-file=.env server.js 
+# Run node, dotenv will load .env from within the script
+node server.js 

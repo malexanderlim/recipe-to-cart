@@ -1,4 +1,4 @@
-// require('dotenv').config({ path: './.env' }); // Use --env-file flag in start script instead for local dev
+require('dotenv').config({ path: './.env' }); // Re-enabled for local development
 
 const express = require('express');
 const cors = require('cors');
@@ -116,10 +116,9 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
     try {
         // 1. Upload image buffer to Vercel Blob
         console.log(`[Async Upload Job ${jobId}] Uploading image to Vercel Blob...`);
-        console.log(`[DEBUG] BLOB_READ_WRITE_TOKEN before put():`, process.env.BLOB_READ_WRITE_TOKEN ? 'Token Found (length: ' + process.env.BLOB_READ_WRITE_TOKEN.length + ')' : 'Token NOT Found');
         const blobResult = await put(originalFilename, buffer, {
-            access: 'public', // Or 'private' if you handle signed URLs
-            addRandomSuffix: true // Avoid name collisions
+            access: 'public',
+            addRandomSuffix: true
         });
         const blobUrl = blobResult.url;
         console.log(`[Async Upload Job ${jobId}] Image uploaded to: ${blobUrl}`);
@@ -203,18 +202,16 @@ app.post('/api/process-image', async (req, res) => {
     console.log(`[Process Image Job ${jobId}] Starting background processing...`);
 
     let jobData;
-    let jobDataString;
     try {
         // --- Retrieve Job Details from Redis ---
         console.log(`[Process Image Job ${jobId}] Fetching job details from Redis...`);
         if (!redis) { throw new Error('Redis client not initialized'); }
-        jobDataString = await redis.get(jobId); // Use redis.get
-        if (!jobDataString) {
+        jobData = await redis.get(jobId); // Assign directly, no parsing needed
+        if (!jobData) { // Check the object directly
             // Job might have expired or been deleted, or ID is invalid
             console.warn(`[Process Image Job ${jobId}] Job data not found in Redis. Aborting.`);
             return res.status(200).json({ message: `Job data not found for ${jobId}, likely expired or invalid.` });
         }
-        jobData = JSON.parse(jobDataString); // Parse the string result
         console.log(`[Process Image Job ${jobId}] Retrieved job data status: ${jobData.status}`);
         // -------------------------------------
 
@@ -403,25 +400,19 @@ app.get('/api/job-status', async (req, res) => {
         return res.status(400).json({ error: 'Missing Job ID query parameter.' });
     }
 
-    // console.log(`[Job Status] Checking status for Job ID: ${jobId}`); // Can be noisy
-
     try {
         if (!redis) { throw new Error('Redis client not initialized'); }
-        const jobDataString = await redis.get(jobId); // Use redis.get
-        if (!jobDataString) {
+        const jobData = await redis.get(jobId); // Assign directly, no parsing needed
+        if (!jobData) { // Check the object directly
             // If job isn't found, it might have expired or never existed
             console.warn(`[Job Status] Job data not found in Redis for Job ID: ${jobId}`);
             return res.status(404).json({ status: 'not_found', error: 'Job not found or expired.' });
         }
 
-        const jobData = JSON.parse(jobDataString); // Parse the result
-
-        // console.log(`[Job Status] Found status for Job ID ${jobId}: ${jobData.status}`); // Can be noisy
-        // Return relevant parts of the job data
         res.json({
             status: jobData.status,
-            result: jobData.result, // Only present if status is 'completed'
-            error: jobData.error    // Only present if status is 'failed'
+            result: jobData.result,
+            error: jobData.error
         });
 
     } catch (error) {
