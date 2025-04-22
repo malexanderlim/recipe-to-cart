@@ -146,7 +146,7 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
         console.log(`[Async Upload Job ${jobId}] Sending trigger secret (masked): ...${triggerSecretToSend.slice(-4)}`); // Log masked secret
 
         // Use fetch for fire-and-forget - DO NOT await this
-        fetch('/api/process-image', {
+        fetch(processImageUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
