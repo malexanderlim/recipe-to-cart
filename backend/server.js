@@ -497,11 +497,57 @@ Final JSON Output:
         let conversionDataList;
         try {
             let jsonString = rawLlmResponse.trim();
+            let parsedJson = null;
+ 
+            // Attempt 1: Strict ```json block extraction using regex
             const jsonMatch = jsonString.match(/```json\s*([\s\S]*?)\s*```/);
-            if (jsonMatch) jsonString = jsonMatch[1].trim();
-            else console.warn("V7: LLM response did not contain JSON markdown block. Attempting to parse directly.");
-            conversionDataList = JSON.parse(jsonString);
-            
+            if (jsonMatch && jsonMatch[1]) {
+                jsonString = jsonMatch[1].trim();
+                console.log("V7: Extracted JSON using regex match.");
+                try {
+                    parsedJson = JSON.parse(jsonString);
+                } catch (e) {
+                    console.warn("V7: Regex match content failed to parse:", e.message);
+                    // Reset jsonString if parsing the extracted part failed, to allow other attempts
+                    jsonString = rawLlmResponse.trim();
+                    parsedJson = null;
+                }
+            }
+
+            // Attempt 2: Manual stripping if regex failed but backticks seem present
+            if (parsedJson === null && jsonString.startsWith("```json") && jsonString.endsWith("```")) {
+                 console.warn("V7: Regex failed or its content was invalid, attempting manual backtick stripping.");
+                 jsonString = jsonString.substring(7, jsonString.length - 3).trim(); // Remove ```json and ```
+                 try {
+                      parsedJson = JSON.parse(jsonString);
+                      console.log("V7: Successfully parsed JSON after manual stripping.");
+                 } catch (e) {
+                      console.warn("V7: Manual stripping content failed to parse:", e.message);
+                      parsedJson = null; // Reset on failure
+                 }
+            }
+
+            // Attempt 3: Try parsing the raw trimmed string if it looks like JSON (e.g., starts with [)
+            if (parsedJson === null && jsonString.startsWith("[") && jsonString.endsWith("]")) {
+                 console.warn("V7: No backticks found/parsed, attempting to parse raw string as array.");
+                 try {
+                     parsedJson = JSON.parse(jsonString);
+                     console.log("V7: Successfully parsed raw string as JSON.");
+                 } catch (e) {
+                     console.warn("V7: Raw string parsing failed:", e.message);
+                     parsedJson = null;
+                 }
+            }
+ 
+            // Final check and assignment
+            if (parsedJson === null) {
+                 console.error("V7: Failed to parse JSON from LLM response after multiple attempts.");
+                 console.error("V7: Raw Response causing failure:\n---\n" + rawLlmResponse + "\n---");
+                 throw new Error("Could not parse conversion data from AI response."); // More specific error
+            }
+
+            conversionDataList = parsedJson; // Assign the successfully parsed JSON
+
             if (!Array.isArray(conversionDataList)) throw new Error("LLM output is not an array.");
             conversionDataList.forEach((item, index) => {
                 if (!item.normalized_name || !item.primary_unit || !Array.isArray(item.equivalent_units)) {
@@ -516,7 +562,7 @@ Final JSON Output:
             console.log("V7: Successfully parsed conversion data from LLM.");
         } catch (parseError) {
             console.error("V7: Error parsing LLM JSON response:", parseError);
-            throw new Error(`AI Processing Failed: Could not parse conversion data. Details: ${parseError.message}`);
+            throw new Error(`AI Processing Failed: ${parseError.message}`); // Throw the specific parse error
         }
 
         // --- Step 2: Algorithmic Consolidation using LLM Data ---
