@@ -922,7 +922,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderSingleRecipeResult(recipeData, false);
             } else if (data.status === 'pending' || data.status === 'vision_completed') {
                 // Continue polling, check max attempts
-                renderSingleRecipeResult(recipeData, false);
+                // DO NOT render final state here - handled by timeout or next successful poll
             } else if (data.status === 'not_found') {
                 console.error(`[Recipe ${recipeId}] Job ID ${jobId} not found. Stopping polling.`);
                 stopPolling(recipeId, 'Processing job data lost. Please try again.');
