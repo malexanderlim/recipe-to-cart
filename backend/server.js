@@ -278,7 +278,8 @@ app.post('/api/process-image', async (req, res) => {
         // ----------------------------------------------
 
         // --- Google Cloud Vision API Call (Moved from /api/upload) ---
-        console.log(`[Process Image Job ${jobId}] Calling Google Cloud Vision API...`);
+        console.log(`[Process Image Job ${jobId}] Calling Google Cloud Vision API... (Timestamp: ${Date.now()})`);
+        const visionStartTime = Date.now(); // Start timer
         if (!visionClient) {
            console.error(`[Process Image Job ${jobId}] Vision client is not initialized!`);
            throw new Error('Vision client failed to initialize. Cannot call Vision API.');
@@ -290,7 +291,9 @@ app.post('/api/process-image', async (req, res) => {
             });
             const detections = result.textAnnotations;
             extractedText = detections && detections.length > 0 ? detections[0].description : '';
-             console.log(`[Process Image Job ${jobId}] Successfully extracted text from Vision API. Length: ${extractedText.length}`);
+            const visionEndTime = Date.now(); // End timer
+            const visionDuration = visionEndTime - visionStartTime;
+            console.log(`[Process Image Job ${jobId}] Successfully extracted text from Vision API. Length: ${extractedText.length}. Duration: ${visionDuration}ms. (Timestamp: ${Date.now()})`);
         } catch (visionError) {
              console.error(`[Process Image Job ${jobId}] Google Vision API call failed:`, visionError);
              const failedData = { ...jobData, status: 'failed', error: 'Could not read text from the image.', finishedAt: Date.now() };
@@ -955,7 +958,6 @@ app.post('/api/process-text', async (req, res) => {
         // --- Update Redis with FINAL Completed Status and Result ---
         console.log(`[Process Text Job ${jobId}] Text processing successful. Updating Redis status to 'completed'.`);
         const completedData = {
-            ...jobData,
             status: 'completed',
             result: finalResult, // Store the parsed recipe data
             anthropicFinishedAt: Date.now()
@@ -963,6 +965,9 @@ app.post('/api/process-text', async (req, res) => {
         await redis.set(jobId, JSON.stringify(completedData));
         console.log(`[Process Text Job ${jobId}] Redis updated successfully with final result.`);
         // ---------------------------------------------------------
+
+        // --- Added Log for Parsed Result ---
+        console.log(`[Process Text Job ${jobId}] Final Parsed Result:`, JSON.stringify(finalResult, null, 2));
 
         res.status(200).json({ message: 'Text processing completed successfully.' });
 
