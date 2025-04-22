@@ -73,7 +73,7 @@ async function callAnthropic(systemPrompt, userPrompt) {
     try {
         const response = await anthropic.messages.create({
             model: "claude-3-haiku-20240307", // <-- Use Haiku model for cost efficiency
-            max_tokens: 2048, // Adjust as needed, ensure enough for JSON output
+            max_tokens: 4096, // INCREASED: Allow larger JSON output, esp. for create-list
             temperature: 0.1, // Low temperature for deterministic results
             system: systemPrompt,
             messages: [{ role: "user", content: userPrompt }]
