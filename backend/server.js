@@ -150,7 +150,7 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-Internal-Trigger-Secret': triggerSecretToSend // Use the variable
+                'X-Internal-Trigger-Secret': triggerSecretToSend
             },
             body: JSON.stringify({ jobId: jobId })
         }).catch(async (fetchError) => { // Make catch async to allow await redis.set
@@ -203,12 +203,8 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
 // Background processing endpoint (triggered by /api/upload)
 app.post('/api/process-image', async (req, res) => {
     console.log(`[Process Image Handler] ===== FUNCTION HANDLER ENTERED =====`); // Log immediately
-    // --- ADDED LOG AT VERY TOP ---
-    // console.log(`[Process Image Handler] ===== INVOKED =====`); // Commented out redundant log
-    // console.log(`[Process Image Handler] Request Body:`, JSON.stringify(req.body)); // Commented out
-    // const receivedTriggerSecret = req.headers['x-internal-trigger-secret']; // Commented out
-    // console.log(`[Process Image Handler] Received Trigger Secret (masked): ...${receivedTriggerSecret ? receivedTriggerSecret.slice(-4) : 'MISSING'}`); // Commented out
-    // --- END ADDED LOG ---
+    console.log(`[Process Image Handler] ===== INVOKED =====`); // Restore original log
+    const receivedTriggerSecret = req.headers['x-internal-trigger-secret']; // Restore variable
 
     // --- ENTIRE BODY COMMENTED OUT FOR TESTING ---
     /*
