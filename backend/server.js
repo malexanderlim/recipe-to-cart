@@ -441,7 +441,7 @@ app.post('/api/create-list', async (req, res) => {
     try {
         // --- Step 1: Single LLM Call for Normalization & Conversion Data ---
         console.log("V7 Step 1: Calling LLM for normalization and conversion data (Instacart Doc Examples)...");
-        const systemPrompt = `You are an expert grocery shopping assistant simulating a shopper at a typical US grocery store. Your ONLY goal is to determine how recipe ingredients translate to standard PURCHASABLE units, using official Instacart unit guidance. Analyze the provided list of raw ingredients, identify unique conceptual items, and for each item, specify its common name, its PRIMARY PURCHASABLE unit, and conversion factors FROM that primary unit TO other relevant units. Respond ONLY with a valid JSON array.`;
+        const systemPrompt = `You are an expert grocery shopping assistant simulating a shopper at a typical US grocery store. Your ONLY goal is to determine how recipe ingredients translate to standard PURCHASABLE units, using official Instacart unit guidance. Analyze the provided list of raw ingredients, identify unique conceptual items, and for each item, specify its common name, its PRIMARY PURCHASABLE unit, and conversion factors FROM that primary unit TO other relevant units. Respond ONLY with a single, valid JSON array containing objects for each unique ingredient. Do NOT include any introductory text, markdown formatting, or any other text outside the JSON array itself.`;
 
         const uniqueIngredientStrings = [...new Set(rawIngredients.map(item => item.ingredient).filter(Boolean))];
         
@@ -539,8 +539,8 @@ Final JSON Output:
                  }
             }
 
-            // Attempt 3: Try parsing the raw trimmed string if it looks like JSON (e.g., starts with [)
-            if (parsedJson === null && jsonString.startsWith("[") && jsonString.endsWith("]")) {
+            // Attempt 3: Updated: Check for start bracket only, as end bracket might be missing if truncated
+            if (parsedJson === null && jsonString.startsWith("[")) {
                  console.warn("V7: No backticks found/parsed, attempting to parse raw string as array.");
                  try {
                      parsedJson = JSON.parse(jsonString);
@@ -550,7 +550,23 @@ Final JSON Output:
                      parsedJson = null;
                  }
             }
- 
+
+            // Attempt 4: Find the first '[' or '{' and parse from there
+            if (parsedJson === null) {
+                 console.warn("V7: Previous attempts failed, finding first '[' or '{' to parse from.");
+                 const jsonStartIndex = jsonString.search(/\s*[{\[]/); // Find first { or [
+                 if (jsonStartIndex !== -1) {
+                     jsonString = jsonString.substring(jsonStartIndex);
+                     try {
+                         parsedJson = JSON.parse(jsonString);
+                         console.log("V7: Successfully parsed JSON after finding start bracket/brace.");
+                     } catch (e) {
+                         console.warn("V7: Parsing after finding start bracket/brace failed:", e.message);
+                         parsedJson = null;
+                     }
+                 }
+             }
+
             // Final check and assignment
             if (parsedJson === null) {
                  console.error("V7: Failed to parse JSON from LLM response after multiple attempts.");
