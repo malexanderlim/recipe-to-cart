@@ -895,12 +895,16 @@ app.post('/api/process-text', async (req, res) => {
         // --- Anthropic API Call (Stage 1 - Initial Extraction) ---
         console.log(`[Process Text Job ${jobId}] Sending extracted text to Anthropic...`);
         const systemPromptStage1 = `You are an expert recipe parser. Analyze the following recipe text extracted via OCR and extract key information. Output ONLY a valid JSON object.`;
-        const userPromptStage1 = `Recipe Text:\n---\n${extractedText}\n---\n\nExtract the recipe title, yield (quantity and unit, e.g., "4 servings", "2 cups"), and a list of ingredients.\nFor each ingredient, provide:\n- quantity: The numerical value (e.g., 0.5, 30, 1). Use null if not specified.\n- unit: The unit as written in the text (e.g., 'cup', 'cloves', 'tsp', 'sprigs', 'each', 'lb'). Use null if not specified or implied (like '1 lemon').\n- ingredient: The name of the ingredient as written, including descriptive words (e.g., 'extra-virgin olive oil', 'garlic cloves, peeled', 'kosher salt').\n\nOutput ONLY a single JSON object with keys "title", "yield" (an object with "quantity" and "unit"), and "ingredients" (an array of objects with "quantity", "unit", "ingredient"). Ensure the JSON is valid.`;
+        const userPromptStage1 = `Recipe Text:\n---\n${extractedText}\n---\n\nFocus ONLY on the main ingredient list section(s) of the text. Extract the recipe title, yield (quantity and unit, e.g., "4 servings", "2 cups"), and a list of ingredients.\nFor each ingredient, provide:\n- quantity: The numerical value (e.g., 0.5, 30, 1). Use null if not specified or implied (like '1 lemon').\n- unit: The unit as written in the text (e.g., 'cup', 'cloves', 'tsp', 'sprigs', 'each', 'lb'). Use null if not specified.\n- ingredient: The name of the ingredient as written, including descriptive words (e.g., 'extra-virgin olive oil', 'garlic cloves, peeled', 'kosher salt'). Do NOT include quantities or units in this field.\n\nOutput ONLY a single valid JSON object with keys "title", "yield" (an object with "quantity" and "unit"), and "ingredients" (an array of objects with "quantity", "unit", "ingredient").`; // Slightly refined prompt
 
         let rawJsonResponse = '';
+        const anthropicStartTime = Date.now(); // Start timer
+        console.log(`[Process Text Job ${jobId}] Calling Anthropic API... (Timestamp: ${anthropicStartTime})`);
         try {
             rawJsonResponse = await callAnthropic(systemPromptStage1, userPromptStage1); // Using existing helper
-            console.log(`[Process Text Job ${jobId}] Received response from Anthropic.`);
+            const anthropicEndTime = Date.now(); // End timer
+            const anthropicDuration = anthropicEndTime - anthropicStartTime;
+            console.log(`[Process Text Job ${jobId}] Received response from Anthropic. Duration: ${anthropicDuration}ms. (Timestamp: ${anthropicEndTime})`);
         } catch (anthropicError) {
             console.error(`[Process Text Job ${jobId}] Anthropic API call failed:`, anthropicError);
             const failedData = { ...jobData, status: 'failed', error: 'Could not understand ingredients from the text.', extractedText: extractedText, finishedAt: Date.now() };
@@ -954,6 +958,27 @@ app.post('/api/process-text', async (req, res) => {
              return; // Exit after setting failed status
         }
         // ---------------------------
+
+        // --- Deduplicate quantity-less ingredients (e.g., salt, pepper) ---
+        const uniqueIngredients = new Map();
+        const deduplicatedIngredients = [];
+        if (finalResult.ingredients && Array.isArray(finalResult.ingredients)) {
+            finalResult.ingredients.forEach(item => {
+                const key = item.ingredient?.toLowerCase().trim();
+                // Only deduplicate if quantity and unit are null/undefined
+                if (item.quantity == null && item.unit == null && key) {
+                    if (!uniqueIngredients.has(key)) {
+                        uniqueIngredients.set(key, item);
+                        deduplicatedIngredients.push(item);
+                    }
+                } else {
+                    deduplicatedIngredients.push(item); // Keep items with quantity/unit
+                }
+            });
+            finalResult.ingredients = deduplicatedIngredients; // Replace with deduplicated list
+            console.log(`[Process Text Job ${jobId}] Deduplicated ingredient list size: ${finalResult.ingredients.length}`);
+        }
+        // ------------------------------------------------------------------
 
         // --- Update Redis with FINAL Completed Status and Result ---
         console.log(`[Process Text Job ${jobId}] Text processing successful. Updating Redis status to 'completed'.`);
