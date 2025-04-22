@@ -147,19 +147,32 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                 // Add a simple secret header for basic security (optional but recommended)
                  'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret'
             },
             body: JSON.stringify({ jobId: jobId })
-        }).catch(fetchError => {
+        }).catch(async (fetchError) => { // Make catch async to allow await redis.set
             // Log the error, but don't fail the initial request.
-            // The frontend will eventually detect the job failure via polling.
-            console.error(`[Async Upload Job ${jobId}] Error triggering background process:`, fetchError);
+            console.error(`[Async Upload Job ${jobId}] CRITICAL: Error triggering background process fetch:`, fetchError);
             // Optionally update Redis status to failed here if triggering fails critically
-            // redis.set(jobId, { status: 'failed', error: 'Failed to trigger background process' });
+            if (redis) {
+                 try {
+                     const triggerFailData = { 
+                         status: 'failed', 
+                         error: `Failed to trigger background process: ${fetchError.message}`,
+                         originalFilename: originalFilename, // Include some context
+                         createdAt: initialJobData.createdAt, // Keep original creation time
+                         finishedAt: Date.now()
+                      };
+                     await redis.set(jobId, JSON.stringify(triggerFailData));
+                     console.log(`[Async Upload Job ${jobId}] Updated Redis status to failed due to trigger error.`);
+                 } catch (redisError) {
+                     console.error(`[Async Upload Job ${jobId}] Failed to update Redis after trigger error:`, redisError);
+                 }
+            }
         });
 
-        console.log(`[Async Upload Job ${jobId}] Background process triggered.`);
+        // Add log *after* dispatch attempt
+        console.log(`[Async Upload Job ${jobId}] Background process fetch dispatched (fire-and-forget).`);
 
         // 4. Return 202 Accepted with the Job ID
         res.status(202).json({ jobId: jobId });
@@ -186,6 +199,11 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
 
 // Background processing endpoint (triggered by /api/upload)
 app.post('/api/process-image', async (req, res) => {
+    // --- ADDED LOG AT VERY TOP --- 
+    console.log(`[Process Image Handler] Invoked. Request Headers:`, JSON.stringify(req.headers));
+    console.log(`[Process Image Handler] Request Body:`, JSON.stringify(req.body));
+    // --- END ADDED LOG ---
+
     // Basic security check (optional but recommended)
     const triggerSecret = req.headers['x-internal-trigger-secret'];
     if (triggerSecret !== (process.env.INTERNAL_TRIGGER_SECRET || 'default-secret')) {
