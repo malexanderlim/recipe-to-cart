@@ -1,4 +1,4 @@
-// require('dotenv').config({ path: './.env' }); // REMOVED: Not needed on Vercel
+// require('dotenv').config({ path: './.env' }); // Use --env-file flag in start script instead for local dev
 
 const express = require('express');
 const cors = require('cors');
@@ -8,6 +8,26 @@ const { ImageAnnotatorClient } = require('@google-cloud/vision');
 const Anthropic = require('@anthropic-ai/sdk'); // <-- Ensure Anthropic SDK is required
 const axios = require('axios');
 const heicConvert = require('heic-convert');
+const { Redis } = require('@upstash/redis'); // CHANGED: Import Upstash Redis
+const { put, del } = require('@vercel/blob');
+const crypto = require('crypto');
+
+// --- Initialize Upstash Redis Client ---
+let redis;
+try {
+  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+    throw new Error('Upstash Redis environment variables (UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN) are not set.');
+  }
+  redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  });
+  console.log('Successfully initialized Upstash Redis client.');
+} catch (error) {
+   console.error('Failed to initialize Upstash Redis client:', error);
+   redis = null; // Ensure it's null if init failed
+}
+// ---------------------------------------
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -76,99 +96,343 @@ async function callAnthropic(systemPrompt, userPrompt) {
 // -----------------------------------------
 
 
-// Endpoint for image upload and initial parsing (Stage 1)
+// Endpoint for image upload and initial parsing (Stage 1) ASYNCHRONOUS
 app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
-    console.log(`Received ${req.files.length} files for upload.`);
+    console.log(`[Async Upload] Received ${req.files?.length || 0} files.`);
     if (!req.files || req.files.length === 0) {
         return res.status(400).json({ error: 'No files uploaded.' });
     }
 
-    // --- For simplicity in this example, process only the first file ---
-    // --- In a real scenario, you'd loop or handle multiple files appropriately ---
+    // --- Process only the first file for simplicity ---
     const file = req.files[0];
-    let imageBuffer = file.buffer;
     const originalFilename = file.originalname;
-    const mimeType = file.mimetype;
+    const buffer = file.buffer; // Get the file buffer directly
 
-    console.log(`Processing file: ${originalFilename}, DETECTED MIMETYPE: ${mimeType}, size: ${file.size} bytes`);
+    console.log(`[Async Upload] Processing file: ${originalFilename}, size: ${file.size} bytes`);
 
-    // --- HEIC Conversion ---
-    if (originalFilename.toLowerCase().endsWith('.heic') || originalFilename.toLowerCase().endsWith('.heif') || mimeType === 'image/heic' || mimeType === 'image/heif') {
-         console.log('HEIC/HEIF file detected, attempting conversion to JPEG...');
-        try {
-            imageBuffer = await heicConvert({
-                buffer: imageBuffer,
-                format: 'JPEG',
-                quality: 0.8
-            });
-             console.log('Successfully converted HEIC to JPEG.');
-        } catch (convertError) {
-            console.error('HEIC conversion failed:', convertError);
-            return res.status(500).json({ error: 'Failed to convert HEIC image.', details: convertError.message });
-        }
-    }
-    // ----------------------
+    const jobId = crypto.randomUUID();
+    console.log(`[Async Upload] Generated Job ID: ${jobId}`);
 
     try {
-        // --- Google Cloud Vision API Call ---
-        console.log('Calling Google Cloud Vision API...');
-        if (!visionClient) {
-           throw new Error('Vision client failed to initialize. Cannot call Vision API.');
-        }
-        const [result] = await visionClient.textDetection({
-            image: { content: imageBuffer },
+        // 1. Upload image buffer to Vercel Blob
+        console.log(`[Async Upload Job ${jobId}] Uploading image to Vercel Blob...`);
+        console.log(`[DEBUG] BLOB_READ_WRITE_TOKEN before put():`, process.env.BLOB_READ_WRITE_TOKEN ? 'Token Found (length: ' + process.env.BLOB_READ_WRITE_TOKEN.length + ')' : 'Token NOT Found');
+        const blobResult = await put(originalFilename, buffer, {
+            access: 'public', // Or 'private' if you handle signed URLs
+            addRandomSuffix: true // Avoid name collisions
         });
-        const detections = result.textAnnotations;
-        const extractedText = detections && detections.length > 0 ? detections[0].description : '';
-        console.log('Successfully extracted text from Vision API.');
+        const blobUrl = blobResult.url;
+        console.log(`[Async Upload Job ${jobId}] Image uploaded to: ${blobUrl}`);
+
+        // 2. Store initial job state in Upstash Redis
+        console.log(`[Async Upload Job ${jobId}] Storing initial job state in Redis...`);
+        if (!redis) { throw new Error('Redis client not initialized'); }
+        const initialJobData = {
+            status: 'pending',
+            originalFilename: originalFilename,
+            blobUrl: blobUrl, // Store the URL to the image in Blob
+            createdAt: Date.now()
+        };
+        await redis.set(jobId, JSON.stringify(initialJobData), { ex: 86400 }); // Use redis.set with stringify
+        console.log(`[Async Upload Job ${jobId}] Initial job state stored.`);
+
+        // 3. Asynchronously trigger the background processing function
+        // Construct the absolute URL for the API endpoint
+        // IMPORTANT: Use VERCEL_URL or similar for production, fallback for local
+        const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `${req.protocol}://${req.get('host')}`;
+        const processImageUrl = `${baseUrl}/api/process-image`;
+        console.log(`[Async Upload Job ${jobId}] Triggering background processing at: ${processImageUrl}`);
+
+        // Use fetch for fire-and-forget - DO NOT await this
+        fetch(processImageUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                 // Add a simple secret header for basic security (optional but recommended)
+                 'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret'
+            },
+            body: JSON.stringify({ jobId: jobId })
+        }).catch(fetchError => {
+            // Log the error, but don't fail the initial request.
+            // The frontend will eventually detect the job failure via polling.
+            console.error(`[Async Upload Job ${jobId}] Error triggering background process:`, fetchError);
+            // Optionally update Redis status to failed here if triggering fails critically
+            // redis.set(jobId, { status: 'failed', error: 'Failed to trigger background process' });
+        });
+
+        console.log(`[Async Upload Job ${jobId}] Background process triggered.`);
+
+        // 4. Return 202 Accepted with the Job ID
+        res.status(202).json({ jobId: jobId });
+        console.log(`[Async Upload Job ${jobId}] Sent 202 Accepted to client.`);
+
+    } catch (error) {
+        console.error(`[Async Upload Job ${jobId}] Error during initial upload/setup:`, error);
+        // Attempt to clean up Redis entry if setup failed badly
+        try {
+             if (redis) { await redis.del(jobId); } // Use redis.del
+        } catch (redisDelError) {
+             console.error(`[Async Upload Job ${jobId}] Failed to clean up Redis on error:`, redisDelError);
+        }
+        // Maybe attempt blob cleanup if `blobResult` exists? More complex.
+        const blobUrlToDelete = error?.blobResult?.url; // Hypothetical error object enrichment
+        if (blobUrlToDelete) {
+             try { await del(blobUrlToDelete); } catch (blobDelError) { console.error(`[Async Upload Job ${jobId}] Failed to clean up Blob on error: ${blobDelError.message}`); }
+        }
+
+        res.status(500).json({ error: 'Failed to initiate image processing.', details: error.message });
+    }
+});
+
+
+// Background processing endpoint (triggered by /api/upload)
+app.post('/api/process-image', async (req, res) => {
+    // Basic security check (optional but recommended)
+    const triggerSecret = req.headers['x-internal-trigger-secret'];
+    if (triggerSecret !== (process.env.INTERNAL_TRIGGER_SECRET || 'default-secret')) {
+        console.warn('[Process Image] Received request with invalid or missing trigger secret.');
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { jobId } = req.body;
+    if (!jobId) {
+        console.error('[Process Image] Received request without Job ID.');
+        return res.status(400).json({ error: 'Missing Job ID.' });
+    }
+
+    console.log(`[Process Image Job ${jobId}] Starting background processing...`);
+
+    let jobData;
+    let jobDataString;
+    try {
+        // --- Retrieve Job Details from Redis ---
+        console.log(`[Process Image Job ${jobId}] Fetching job details from Redis...`);
+        if (!redis) { throw new Error('Redis client not initialized'); }
+        jobDataString = await redis.get(jobId); // Use redis.get
+        if (!jobDataString) {
+            // Job might have expired or been deleted, or ID is invalid
+            console.warn(`[Process Image Job ${jobId}] Job data not found in Redis. Aborting.`);
+            return res.status(200).json({ message: `Job data not found for ${jobId}, likely expired or invalid.` });
+        }
+        jobData = JSON.parse(jobDataString); // Parse the string result
+        console.log(`[Process Image Job ${jobId}] Retrieved job data status: ${jobData.status}`);
+        // -------------------------------------
+
+        if (jobData.status !== 'pending') {
+             console.warn(`[Process Image Job ${jobId}] Job status is already '${jobData.status}'. Skipping processing.`);
+             return res.status(200).json({ message: `Job already processed or failed: ${jobData.status}`});
+        }
+        const { blobUrl, originalFilename } = jobData;
+        console.log(`[Process Image Job ${jobId}] Retrieved blobUrl: ${blobUrl}`);
+        // ------------------------------------
+
+        // --- Download Image from Blob ---
+        console.log(`[Process Image Job ${jobId}] Downloading image from Blob...`);
+        const imageResponse = await fetch(blobUrl);
+        if (!imageResponse.ok) {
+            const errorText = await imageResponse.text();
+            throw new Error(`Failed to download image from Blob. Status: ${imageResponse.status} ${imageResponse.statusText}. Body: ${errorText}`);
+        }
+        let imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+        console.log(`[Process Image Job ${jobId}] Image downloaded. Size: ${imageBuffer.length} bytes.`);
         // --------------------------------
 
+        // --- HEIC Conversion (Moved from /api/upload) ---
+        const isHeic = originalFilename && (originalFilename.toLowerCase().endsWith('.heic') || originalFilename.toLowerCase().endsWith('.heif'));
+        if (isHeic) {
+            console.log(`[Process Image Job ${jobId}] HEIC/HEIF file detected, attempting conversion...`);
+            try {
+                imageBuffer = await heicConvert({
+                    buffer: imageBuffer,
+                    format: 'JPEG',
+                    quality: 0.8
+                });
+                 console.log(`[Process Image Job ${jobId}] Successfully converted HEIC to JPEG.`);
+            } catch (convertError) {
+                 console.error(`[Process Image Job ${jobId}] HEIC conversion failed:`, convertError);
+                 // Update Redis to failed status
+                 const failedData = { ...jobData, status: 'failed', error: `HEIC conversion failed: ${convertError.message}`, finishedAt: Date.now() };
+                 await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
+                 throw convertError; // Propagate error to main catch block
+            }
+        }
+        // ----------------------------------------------
+
+        // --- Google Cloud Vision API Call (Moved from /api/upload) ---
+        console.log(`[Process Image Job ${jobId}] Calling Google Cloud Vision API...`);
+        if (!visionClient) {
+           console.error(`[Process Image Job ${jobId}] Vision client is not initialized!`);
+           throw new Error('Vision client failed to initialize. Cannot call Vision API.');
+        }
+        let extractedText = '';
+        try {
+            const [result] = await visionClient.textDetection({
+                image: { content: imageBuffer },
+            });
+            const detections = result.textAnnotations;
+            extractedText = detections && detections.length > 0 ? detections[0].description : '';
+             console.log(`[Process Image Job ${jobId}] Successfully extracted text from Vision API. Length: ${extractedText.length}`);
+        } catch (visionError) {
+             console.error(`[Process Image Job ${jobId}] Google Vision API call failed:`, visionError);
+             const failedData = { ...jobData, status: 'failed', error: `Google Vision API failed: ${visionError.message}`, finishedAt: Date.now() };
+             await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
+             throw visionError;
+        }
+        // ---------------------------------------------------------
+
+        let finalResult = { extractedText: '', title: null, yield: null, ingredients: [] }; // Default empty result
+
         if (extractedText && extractedText.trim().length > 0) {
-            // --- Anthropic API Call (Stage 1 - Initial Extraction) ---
-            console.log('Sending extracted text to Anthropic for ingredient parsing...');
+            // --- Anthropic API Call (Stage 1 - Initial Extraction) (Moved from /api/upload) ---
+            console.log(`[Process Image Job ${jobId}] Sending extracted text to Anthropic...`);
             const systemPromptStage1 = `You are an expert recipe parser. Analyze the following recipe text extracted via OCR and extract key information. Output ONLY a valid JSON object.`;
             const userPromptStage1 = `Recipe Text:\n---\n${extractedText}\n---\n\nExtract the recipe title, yield (quantity and unit, e.g., "4 servings", "2 cups"), and a list of ingredients.\nFor each ingredient, provide:\n- quantity: The numerical value (e.g., 0.5, 30, 1). Use null if not specified.\n- unit: The unit as written in the text (e.g., 'cup', 'cloves', 'tsp', 'sprigs', 'each', 'lb'). Use null if not specified or implied (like '1 lemon').\n- ingredient: The name of the ingredient as written, including descriptive words (e.g., 'extra-virgin olive oil', 'garlic cloves, peeled', 'kosher salt').\n\nOutput ONLY a single JSON object with keys "title", "yield" (an object with "quantity" and "unit"), and "ingredients" (an array of objects with "quantity", "unit", "ingredient"). Ensure the JSON is valid.`;
 
-            const rawJsonResponse = await callAnthropic(systemPromptStage1, userPromptStage1);
-            console.log("Received response from Anthropic.");
-            // --------------------------
-
-            // --- Parse Stage 1 Response ---
+            let rawJsonResponse = '';
             try {
-                const jsonMatch = rawJsonResponse.match(/```json\s*([\s\S]*?)\s*```/);
-                const jsonString = jsonMatch ? jsonMatch[1].trim() : rawJsonResponse.trim();
-                const parsedData = JSON.parse(jsonString);
-                console.log(`Successfully parsed title, yield, and ${parsedData.ingredients?.length || 0} ingredients from Anthropic response.`);
+                rawJsonResponse = await callAnthropic(systemPromptStage1, userPromptStage1); // Using existing helper
+                console.log(`[Process Image Job ${jobId}] Received response from Anthropic.`);
+            } catch (anthropicError) {
+                console.error(`[Process Image Job ${jobId}] Anthropic API call failed:`, anthropicError);
+                const failedData = { ...jobData, status: 'failed', error: `Anthropic API call failed: ${anthropicError.message}`, extractedText: extractedText, finishedAt: Date.now() };
+                await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
+                throw anthropicError;
+            }
+            // ----------------------------------------------------------------------
 
-                res.json({
-                    extractedText, // Send raw text back too for debugging/context
+            // --- Parse Stage 1 Response (Moved from /api/upload) ---
+             try {
+                const jsonMatch = rawJsonResponse.match(/```json\s*([\s\S]*?)\s*```/);
+                let jsonString = rawJsonResponse.trim();
+                if (jsonMatch && jsonMatch[1]) {
+                    jsonString = jsonMatch[1].trim();
+                } else if (rawJsonResponse.startsWith('{') && rawJsonResponse.endsWith('}')) {
+                     // Assume it's already JSON if it starts/ends with braces
+                     console.log(`[Process Image Job ${jobId}] Anthropic response appears to be direct JSON.`);
+                 } else {
+                    // Attempt to find JSON within potential surrounding text if no backticks
+                    const jsonStartIndex = rawJsonResponse.indexOf('{');
+                    const jsonEndIndex = rawJsonResponse.lastIndexOf('}');
+                    if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
+                        jsonString = rawJsonResponse.substring(jsonStartIndex, jsonEndIndex + 1);
+                        console.log(`[Process Image Job ${jobId}] Extracted potential JSON substring.`);
+                    } else {
+                        throw new Error("Response does not contain ```json block or a valid JSON structure.");
+                    }
+                 }
+
+                const parsedData = JSON.parse(jsonString);
+                console.log(`[Process Image Job ${jobId}] Successfully parsed ${parsedData.ingredients?.length || 0} ingredients.`);
+
+                finalResult = { // Store the successful result
+                    extractedText,
                     title: parsedData.title,
                     yield: parsedData.yield,
                     ingredients: parsedData.ingredients
-                });
-            } catch (parseError) {
-                console.error("Error parsing Stage 1 JSON response:", parseError);
-                console.error("Raw Response causing parse error:", rawJsonResponse);
-                res.status(500).json({ error: 'AI parsing failed: Could not parse JSON structure from Stage 1.', details: parseError.message, rawResponse: rawJsonResponse, extractedText });
-            }
-            // --------------------------
+                };
 
+            } catch (parseError) {
+                console.error(`[Process Image Job ${jobId}] Error parsing Stage 1 JSON response:`, parseError);
+                console.error(`[Process Image Job ${jobId}] Raw Response causing parse error:
+---
+${rawJsonResponse}
+---`);
+                const failedData = {
+                    ...jobData,
+                    status: 'failed',
+                    error: `AI parsing failed: ${parseError.message}`,
+                    rawResponse: rawJsonResponse, // Include raw response for debugging
+                    extractedText: extractedText,
+                    finishedAt: Date.now()
+                 };
+                 await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
+                 res.status(200).json({ message: 'Processing finished with parsing errors.' }); // Signal completion even with parsing error
+                 return; // Exit after setting failed status
+            }
+            // ----------------------------------------------------
         } else {
-            console.log('No extracted text found by Vision API.');
-            res.json({ extractedText: '', title: null, yield: null, ingredients: [] }); // Return empty results
+            console.log(`[Process Image Job ${jobId}] No text extracted by Vision API.`);
+            // Store empty but successful result
+             finalResult = { extractedText: '', title: null, yield: null, ingredients: [] };
         }
 
+        // --- Update Redis with Completed Status and Result ---
+        console.log(`[Process Image Job ${jobId}] Processing successful. Updating Redis status to 'completed'.`);
+        const completedData = {
+            ...jobData,
+            status: 'completed',
+            result: finalResult,
+            finishedAt: Date.now()
+        };
+        await redis.set(jobId, JSON.stringify(completedData)); // Use redis.set
+        console.log(`[Process Image Job ${jobId}] Redis updated successfully.`);
+        // ---------------------------------------------------
+
+        res.status(200).json({ message: 'Processing completed successfully.' });
+
     } catch (error) {
-        console.error('Error in /api/upload endpoint:', error);
-        if (!res.headersSent) { // Avoid sending duplicate error responses
-            res.status(500).json({ error: 'Failed to process image or perform initial parsing.', details: error.message });
+        console.error(`[Process Image Job ${jobId}] Error during background processing:`, error);
+        // Ensure Redis is updated to 'failed' if not already done in specific catch blocks
+        if (jobData && jobData.status !== 'failed') { // Avoid overwriting specific error messages
+            try {
+                 const updatePayload = jobData
+                     ? { ...jobData, status: 'failed', error: `Processing failed: ${error.message}`, finishedAt: Date.now() }
+                     : { status: 'failed', error: `Processing failed early: ${error.message}`, finishedAt: Date.now() };
+
+                await redis.set(jobId, JSON.stringify(updatePayload)); // Use redis.set
+                 console.log(`[Process Image Job ${jobId}] Updated Redis status to 'failed' due to processing error.`);
+             } catch (redisError) {
+                 console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' after error:`, redisError);
+             }
+        }
+         // Respond with an error status, though the frontend relies on polling Redis
+        // It's better to return 200 OK here to prevent Redis from retrying the function on failure.
+        // The failure is recorded in Redis, which the frontend will see.
+        if (!res.headersSent) {
+            // res.status(500).json({ error: `Processing failed for Job ID: ${jobId}`, details: error.message });
+            res.status(200).json({ message: `Processing failed for Job ID ${jobId}, status updated in Redis.` });
         }
     }
 });
 
 
+// Endpoint for frontend polling to check job status
+app.get('/api/job-status', async (req, res) => {
+    const { jobId } = req.query;
+    if (!jobId) {
+        return res.status(400).json({ error: 'Missing Job ID query parameter.' });
+    }
+
+    // console.log(`[Job Status] Checking status for Job ID: ${jobId}`); // Can be noisy
+
+    try {
+        if (!redis) { throw new Error('Redis client not initialized'); }
+        const jobDataString = await redis.get(jobId); // Use redis.get
+        if (!jobDataString) {
+            // If job isn't found, it might have expired or never existed
+            console.warn(`[Job Status] Job data not found in Redis for Job ID: ${jobId}`);
+            return res.status(404).json({ status: 'not_found', error: 'Job not found or expired.' });
+        }
+
+        const jobData = JSON.parse(jobDataString); // Parse the result
+
+        // console.log(`[Job Status] Found status for Job ID ${jobId}: ${jobData.status}`); // Can be noisy
+        // Return relevant parts of the job data
+        res.json({
+            status: jobData.status,
+            result: jobData.result, // Only present if status is 'completed'
+            error: jobData.error    // Only present if status is 'failed'
+        });
+
+    } catch (error) {
+        console.error(`[Job Status] Error fetching status for Job ID ${jobId} from Redis:`, error);
+        res.status(500).json({ error: 'Failed to retrieve job status.', details: error.message });
+    }
+});
+
+
 // Endpoint to create Instacart list (incorporating Stage 2 LLM)
-// ********** V4: REFACTORED BASED ON 'Single LLM Call for Conversions, Algorithm for Consolidation' **********
+// ********** V7: SINGLE LLM CALL FOR NORMALIZATION & CONVERSIONS, ALGO FOR MATH **********
 app.post('/api/create-list', async (req, res) => {
     const { ingredients: rawIngredients, title = 'My Recipe Ingredients' } = req.body;
     console.log('V7: Received request for /api/create-list.');

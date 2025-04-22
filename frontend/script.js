@@ -31,6 +31,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const backendUrl = isLocal ? 'http://localhost:3001' : ''; // Empty string for relative paths on deployed version
     console.log(`Running ${isLocal ? 'locally' : 'deployed'}. Backend URL: ${backendUrl || '/'}`);
 
+    // --- Define Polling Constants --- 
+    const POLLING_INTERVAL = 3000; // Milliseconds (e.g., 3 seconds)
+    const MAX_POLLING_ATTEMPTS = 40; // e.g., 40 attempts * 3s = 120s timeout
+
     // --- Define Common Pantry Item Keywords (lowercase) --- 
     const commonItemsKeywords = [
         'salt', 
@@ -85,9 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Function to process one file
     async function processSingleFile(file) {
         const recipeId = `recipe-${recipeCounter++}`;
-        const formData = new FormData();
-        formData.append('recipeImages', file);
-
+        
         const recipeData = { 
             id: recipeId, 
             file: file, 
@@ -95,43 +97,62 @@ document.addEventListener('DOMContentLoaded', () => {
             yield: null, 
             ingredients: [], 
             scaleFactor: 1, 
-            error: null 
+            error: null, 
+            jobId: null, // Added
+            pollingIntervalId: null, // Added
+            pollingAttempts: 0 // Added
         };
         processedRecipes.push(recipeData);
-        // Render initial placeholder while processing
-        renderSingleRecipeResult(recipeData, true); 
+        // Render initial placeholder with loading state
+        renderSingleRecipeResult(recipeData, true, 'Initializing upload...'); // Add loading message
+
+        // Clear previous errors for this specific card (if any)
+        clearRecipeError(recipeId);
+
+        const formData = new FormData();
+        formData.append('recipeImages', file);
 
         try {
-            // Use backendUrl variable
+            // Call the NEW ASYNC /api/upload
             const response = await fetch(`${backendUrl}/api/upload`, {
                 method: 'POST',
                 body: formData,
             });
 
-            const data = await response.json(); 
-
-            if (!response.ok) {
-                throw new Error(data.details || data.error || `Server error: ${response.statusText}`);
+            if (response.status === 202) { // Check for 202 Accepted
+                const data = await response.json();
+                const jobId = data.jobId;
+                if (jobId) {
+                    recipeData.jobId = jobId; // Store jobId
+                    recipeData.pollingAttempts = 0; // Initialize polling counter
+                    console.log(`[Recipe ${recipeId}] Upload accepted. Job ID: ${jobId}. Starting polling.`);
+                    // Update UI to show 'Processing...'
+                    renderSingleRecipeResult(recipeData, true, 'Processing image...');
+                    // Start polling
+                    startPollingJobStatus(recipeId, jobId);
+                } else {
+                    throw new Error('Server accepted upload but did not return a Job ID.');
+                }
+            } else {
+                // Handle immediate errors from /api/upload (e.g., 400, 500)
+                const errorData = await response.json().catch(() => ({})); // Try to parse error JSON
+                throw new Error(errorData.details || errorData.error || `Upload failed: ${response.statusText} (Status ${response.status})`);
             }
 
-            recipeData.title = data.title || file.name; 
-            recipeData.yield = data.yield || null; 
-            recipeData.ingredients = data.ingredients || [];
-            recipeData.extractedText = data.extractedText; 
-            recipeData.scaleFactor = 1; // Reset scale factor on successful load
-
         } catch (error) {
-            console.error(`Error processing file ${file.name}:`, error);
-            recipeData.error = `Error: ${error.message}`;
-            displayError(`Failed to process ${file.name}. `);
+            console.error(`[Recipe ${recipeId}] Error initiating upload for ${file.name}:`, error);
+            recipeData.error = `Upload Error: ${error.message}`;
+            displayError(`Failed to start processing for ${file.name}.`); // General error message
+            // Update the specific recipe block with the error
+            renderSingleRecipeResult(recipeData, false); // isLoading = false to show error
+            updateCreateListButtonState(); // Re-evaluate button state after error
         }
-        
-        // Re-render the specific recipe block with full results or error
-        renderSingleRecipeResult(recipeData, false); // isLoading = false
+        // REMOVE the old synchronous result handling and re-rendering call here
     }
 
     // Renders the UI block for a single recipe
-    function renderSingleRecipeResult(recipeData, isLoading = false) {
+    // Modified to accept loading message
+    function renderSingleRecipeResult(recipeData, isLoading = false, loadingMessage = 'Processing...') {
         let recipeDiv = document.getElementById(recipeData.id);
         if (!recipeDiv) {
             recipeDiv = document.createElement('div');
@@ -165,14 +186,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Generate ingredients HTML string directly
-        let ingredientsHTML = '<p>Processing...</p>'; // Default while loading
+        let ingredientsHTML = `<p>${loadingMessage}</p>`; // Use loading message
         if (!isLoading) {
             if (recipeData.error) {
                 ingredientsHTML = `<p class="error">${recipeData.error}</p>`; // Use error class
-            } else if (recipeData.ingredients.length > 0) {
+            } else if (recipeData.ingredients && recipeData.ingredients.length > 0) { // Check ingredients exist
                 // Render ingredients with checkboxes
                 ingredientsHTML = renderParsedIngredientsHTML(recipeData);
             } else {
+                // Handle case where processing finished but no ingredients found (not an error)
                 ingredientsHTML = '<p>No ingredients parsed.</p>';
             }
         }
@@ -789,6 +811,117 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         // Might need to update button state if disabling when *all* are unchecked is desired
         // updateCreateListButtonState(); 
+    }
+
+    // --- NEW: Function to start polling ---
+    function startPollingJobStatus(recipeId, jobId) {
+        const recipeData = processedRecipes.find(r => r.id === recipeId);
+        if (!recipeData) {
+            console.error(`[Polling ${jobId}] Cannot start polling, recipe data not found for ID: ${recipeId}`);
+            return;
+        }
+
+        // Clear any existing interval for this recipe (safety measure)
+        if (recipeData.pollingIntervalId) {
+            clearInterval(recipeData.pollingIntervalId);
+        }
+
+        console.log(`[Polling ${jobId}] Starting polling interval for recipe ${recipeId}`);
+        recipeData.pollingIntervalId = setInterval(() => {
+            pollJobStatus(recipeId, jobId);
+        }, POLLING_INTERVAL);
+    }
+
+    // --- NEW: Function to poll status --- 
+    async function pollJobStatus(recipeId, jobId) {
+        const recipeData = processedRecipes.find(r => r.id === recipeId);
+        if (!recipeData) {
+            console.error(`[Polling ${jobId}] Cannot poll, recipe data not found for ID: ${recipeId}`);
+            // Attempt to clear interval if it exists (though unlikely path)
+            const intervalId = recipeData?.pollingIntervalId; // Use optional chaining
+            if (intervalId) clearInterval(intervalId);
+            return;
+        }
+
+        recipeData.pollingAttempts += 1;
+        console.log(`[Polling ${jobId}] Attempt ${recipeData.pollingAttempts}/${MAX_POLLING_ATTEMPTS} for recipe ${recipeId}`);
+
+        if (recipeData.pollingAttempts > MAX_POLLING_ATTEMPTS) {
+            console.warn(`[Polling ${jobId}] Max polling attempts reached for recipe ${recipeId}. Stopping polling.`);
+            clearInterval(recipeData.pollingIntervalId);
+            recipeData.pollingIntervalId = null;
+            recipeData.error = 'Processing timed out. Please try again.';
+            renderSingleRecipeResult(recipeData, false); // Show timeout error
+            updateCreateListButtonState();
+            return;
+        }
+
+        try {
+            const response = await fetch(`${backendUrl}/api/job-status?jobId=${jobId}`);
+            const data = await response.json();
+
+            console.log(`[Polling ${jobId}] Received status: ${data.status}`);
+
+            switch (data.status) {
+                case 'completed':
+                    clearInterval(recipeData.pollingIntervalId);
+                    recipeData.pollingIntervalId = null;
+                    console.log(`[Polling ${jobId}] Job completed successfully for recipe ${recipeId}.`);
+                    // Update recipeData with results from the job
+                    recipeData.title = data.result.title || recipeData.file.name;
+                    recipeData.yield = data.result.yield || null;
+                    recipeData.ingredients = data.result.ingredients || [];
+                    recipeData.extractedText = data.result.extractedText;
+                    recipeData.scaleFactor = 1; // Reset scale factor
+                    recipeData.error = null; // Clear any previous error
+                    renderSingleRecipeResult(recipeData, false); // Render final result
+                    updateCreateListButtonState();
+                    break;
+                case 'failed':
+                    clearInterval(recipeData.pollingIntervalId);
+                    recipeData.pollingIntervalId = null;
+                    console.error(`[Polling ${jobId}] Job failed for recipe ${recipeId}. Error: ${data.error}`);
+                    recipeData.error = `Processing Failed: ${data.error || 'Unknown error'}`;
+                    renderSingleRecipeResult(recipeData, false); // Render error state
+                    updateCreateListButtonState();
+                    break;
+                case 'pending':
+                    // Update UI with slightly more informative pending message? (Optional)
+                    renderSingleRecipeResult(recipeData, true, `Processing... (Attempt ${recipeData.pollingAttempts})`);
+                    // Continue polling...
+                    break;
+                case 'not_found':
+                    clearInterval(recipeData.pollingIntervalId);
+                    recipeData.pollingIntervalId = null;
+                    console.error(`[Polling ${jobId}] Job not found for recipe ${recipeId}.`);
+                    recipeData.error = 'Processing job not found. It might have expired or failed to start.';
+                    renderSingleRecipeResult(recipeData, false); // Render error state
+                    updateCreateListButtonState();
+                    break;
+                default:
+                    // Unexpected status
+                    console.warn(`[Polling ${jobId}] Received unexpected status '${data.status}' for recipe ${recipeId}.`);
+                    // Optionally continue polling a few more times or treat as failure
+                    // For now, treat as pending to avoid premature failure
+                    renderSingleRecipeResult(recipeData, true, `Processing... (Status: ${data.status})`);
+                    break;
+            }
+        } catch (error) {
+            console.error(`[Polling ${jobId}] Error fetching job status for recipe ${recipeId}:`, error);
+            // Potentially stop polling after a few network errors?
+            // For now, just log and let the max attempts handle it.
+            // You could update the UI to show a temporary network issue message.
+            renderSingleRecipeResult(recipeData, true, `Polling Error... (Attempt ${recipeData.pollingAttempts})`);
+        }
+    }
+
+    // --- Helper function to clear specific recipe card error ---
+    function clearRecipeError(recipeId) {
+        const recipeDiv = document.getElementById(recipeId);
+        const errorElement = recipeDiv?.querySelector('p.error');
+        if (errorElement) {
+            errorElement.remove(); // Remove specific error message
+        }
     }
 });
 

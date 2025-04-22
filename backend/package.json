@@ -12,6 +12,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
     "@google-cloud/vision": "^5.1.0",
+    "@upstash/redis": "^1.31.6",
+    "@vercel/blob": "^1.0.0",
     "axios": "^1.8.4",
     "cors": "^2.8.5",
     "express": "^4.19.2",
@@ -20,6 +22,6 @@
     "parse-ingredient": "^1.2.1"
   },
   "devDependencies": {
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.5.0"
   }
 }
