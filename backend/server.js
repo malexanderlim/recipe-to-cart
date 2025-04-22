@@ -204,15 +204,17 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
 app.post('/api/process-image', async (req, res) => {
     console.log(`[Process Image Handler] ===== FUNCTION HANDLER ENTERED =====`); // Log immediately
     // --- ADDED LOG AT VERY TOP ---
-    console.log(`[Process Image Handler] ===== INVOKED =====`);
-    console.log(`[Process Image Handler] Request Body:`, JSON.stringify(req.body));
-    const receivedTriggerSecret = req.headers['x-internal-trigger-secret'];
-    console.log(`[Process Image Handler] Received Trigger Secret (masked): ...${receivedTriggerSecret ? receivedTriggerSecret.slice(-4) : 'MISSING'}`); // Log received secret before check
+    // console.log(`[Process Image Handler] ===== INVOKED =====`); // Commented out redundant log
+    // console.log(`[Process Image Handler] Request Body:`, JSON.stringify(req.body)); // Commented out
+    // const receivedTriggerSecret = req.headers['x-internal-trigger-secret']; // Commented out
+    // console.log(`[Process Image Handler] Received Trigger Secret (masked): ...${receivedTriggerSecret ? receivedTriggerSecret.slice(-4) : 'MISSING'}`); // Commented out
     // --- END ADDED LOG ---
 
+    // --- ENTIRE BODY COMMENTED OUT FOR TESTING ---
+    /*
     // Basic security check (optional but recommended)
     const triggerSecret = req.headers['x-internal-trigger-secret'];
-    if (receivedTriggerSecret !== (process.env.INTERNAL_TRIGGER_SECRET || 'default-secret')) {
+    if (receivedTriggerSecret !== (process.env.INTERNAL_TRIGGER_SECRET || 'default-secret')) { // Compare received vs expected
         console.warn('[Process Image] Received request with invalid or missing trigger secret.');
         return res.status(403).json({ error: 'Forbidden' });
     }
@@ -412,6 +414,21 @@ ${rawJsonResponse}
         if (!res.headersSent) {
             // res.status(500).json({ error: `Processing failed for Job ID: ${jobId}`, details: error.message });
             res.status(200).json({ message: `Processing failed for Job ID ${jobId}, status updated in Redis.` });
+        }
+    }
+    */
+    // --- END COMMENTED OUT SECTION ---
+
+    // Send a simple response for testing invocation
+    try {
+        console.log('[Process Image Handler] Reached end of simplified function. Sending test response.');
+        res.status(200).send({ message: 'Process-image handler invoked successfully (minimal test).' });
+    } catch (responseError) {
+        // Log if sending the response itself fails for some reason
+        console.error('[Process Image Handler] CRITICAL: Failed to send simplified response:', responseError);
+        // Ensure headers aren't already sent if we somehow get here after an error
+        if (!res.headersSent) {
+            res.status(500).send({ error: 'Failed to send response from simplified handler.'});
         }
     }
 });
