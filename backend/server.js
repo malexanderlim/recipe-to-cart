@@ -302,92 +302,60 @@ app.post('/api/process-image', async (req, res) => {
         let finalResult = { extractedText: '', title: null, yield: null, ingredients: [] }; // Default empty result
 
         if (extractedText && extractedText.trim().length > 0) {
-            // --- Anthropic API Call (Stage 1 - Initial Extraction) (Moved from /api/upload) ---
-            console.log(`[Process Image Job ${jobId}] Sending extracted text to Anthropic...`);
-            const systemPromptStage1 = `You are an expert recipe parser. Analyze the following recipe text extracted via OCR and extract key information. Output ONLY a valid JSON object.`;
-            const userPromptStage1 = `Recipe Text:\n---\n${extractedText}\n---\n\nExtract the recipe title, yield (quantity and unit, e.g., "4 servings", "2 cups"), and a list of ingredients.\nFor each ingredient, provide:\n- quantity: The numerical value (e.g., 0.5, 30, 1). Use null if not specified.\n- unit: The unit as written in the text (e.g., 'cup', 'cloves', 'tsp', 'sprigs', 'each', 'lb'). Use null if not specified or implied (like '1 lemon').\n- ingredient: The name of the ingredient as written, including descriptive words (e.g., 'extra-virgin olive oil', 'garlic cloves, peeled', 'kosher salt').\n\nOutput ONLY a single JSON object with keys "title", "yield" (an object with "quantity" and "unit"), and "ingredients" (an array of objects with "quantity", "unit", "ingredient"). Ensure the JSON is valid.`;
+            // --- STOPPING POINT for this function --- 
 
-            let rawJsonResponse = '';
-            try {
-                rawJsonResponse = await callAnthropic(systemPromptStage1, userPromptStage1); // Using existing helper
-                console.log(`[Process Image Job ${jobId}] Received response from Anthropic.`);
-            } catch (anthropicError) {
-                console.error(`[Process Image Job ${jobId}] Anthropic API call failed:`, anthropicError);
-                const failedData = { ...jobData, status: 'failed', error: `Anthropic API call failed: ${anthropicError.message}`, extractedText: extractedText, finishedAt: Date.now() };
-                await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
-                throw anthropicError;
-            }
-            // ----------------------------------------------------------------------
+            // --- Update Redis with Intermediate Status and Trigger Next Step ---
+            console.log(`[Process Image Job ${jobId}] Vision processing successful. Updating Redis status to 'vision_completed'.`);
+            const visionCompletedData = {
+                ...jobData,
+                status: 'vision_completed',
+                extractedText: extractedText, // Store extracted text for the next step
+                visionFinishedAt: Date.now() // Mark vision completion time
+            };
 
-            // --- Parse Stage 1 Response (Moved from /api/upload) ---
-             try {
-                const jsonMatch = rawJsonResponse.match(/```json\s*([\s\S]*?)\s*```/);
-                let jsonString = rawJsonResponse.trim();
-                if (jsonMatch && jsonMatch[1]) {
-                    jsonString = jsonMatch[1].trim();
-                } else if (rawJsonResponse.startsWith('{') && rawJsonResponse.endsWith('}')) {
-                     // Assume it's already JSON if it starts/ends with braces
-                     console.log(`[Process Image Job ${jobId}] Anthropic response appears to be direct JSON.`);
-                 } else {
-                    // Attempt to find JSON within potential surrounding text if no backticks
-                    const jsonStartIndex = rawJsonResponse.indexOf('{');
-                    const jsonEndIndex = rawJsonResponse.lastIndexOf('}');
-                    if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
-                        jsonString = rawJsonResponse.substring(jsonStartIndex, jsonEndIndex + 1);
-                        console.log(`[Process Image Job ${jobId}] Extracted potential JSON substring.`);
-                    } else {
-                        throw new Error("Response does not contain ```json block or a valid JSON structure.");
-                    }
-                 }
+            await redis.set(jobId, JSON.stringify(visionCompletedData));
+            console.log(`[Process Image Job ${jobId}] Redis updated successfully. Triggering /api/process-text.`);
 
-                const parsedData = JSON.parse(jsonString);
-                console.log(`[Process Image Job ${jobId}] Successfully parsed ${parsedData.ingredients?.length || 0} ingredients.`);
+            // Asynchronously trigger the next processing function (/api/process-text)
+            const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `${req.protocol}://${req.get('host')}`;
+            const processTextUrl = `${baseUrl}/api/process-text`;
+            const triggerSecretToSend = process.env.INTERNAL_TRIGGER_SECRET || 'default-secret';
+            fetch(processTextUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Internal-Trigger-Secret': triggerSecretToSend
+                    // No Vercel Auth needed here assuming it's disabled globally
+                },
+                body: JSON.stringify({ jobId: jobId })
+            }).catch(async (fetchError) => {
+                console.error(`[Process Image Job ${jobId}] CRITICAL: Error triggering /api/process-text fetch:`, fetchError);
+                // Update status to failed if triggering the next step fails
+                const triggerFailData = { ...visionCompletedData, status: 'failed', error: `Failed to trigger text processing: ${fetchError.message}`, finishedAt: Date.now() };
+                try {
+                    await redis.set(jobId, JSON.stringify(triggerFailData));
+                } catch (redisError) {
+                     console.error(`[Process Image Job ${jobId}] Failed to update Redis after trigger error:`, redisError);
+                }
+            });
 
-                finalResult = { // Store the successful result
-                    extractedText,
-                    title: parsedData.title,
-                    yield: parsedData.yield,
-                    ingredients: parsedData.ingredients
-                };
-
-            } catch (parseError) {
-                console.error(`[Process Image Job ${jobId}] Error parsing Stage 1 JSON response:`, parseError);
-                console.error(`[Process Image Job ${jobId}] Raw Response causing parse error:
----
-${rawJsonResponse}
----`);
-                const failedData = {
-                    ...jobData,
-                    status: 'failed',
-                    error: `AI parsing failed: ${parseError.message}`,
-                    rawResponse: rawJsonResponse, // Include raw response for debugging
-                    extractedText: extractedText,
-                    finishedAt: Date.now()
-                 };
-                 await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
-                 res.status(200).json({ message: 'Processing finished with parsing errors.' }); // Signal completion even with parsing error
-                 return; // Exit after setting failed status
-            }
-            // ----------------------------------------------------
+            res.status(200).json({ message: 'Processing completed successfully.' });
+            return; // Exit successfully
         } else {
             console.log(`[Process Image Job ${jobId}] No text extracted by Vision API.`);
             // Store empty but successful result
-             finalResult = { extractedText: '', title: null, yield: null, ingredients: [] };
+            // Update Redis to completed with empty result and exit
+            const completedData = {
+                ...jobData,
+                status: 'completed',
+                result: { extractedText: '', title: null, yield: null, ingredients: [] }, // Empty result
+                finishedAt: Date.now()
+            };
+            await redis.set(jobId, JSON.stringify(completedData));
+            console.log(`[Process Image Job ${jobId}] Redis updated to 'completed' (no text extracted).`);
+            res.status(200).json({ message: 'Processing completed (no text extracted).' });
+            return; // Exit successfully
         }
-
-        // --- Update Redis with Completed Status and Result ---
-        console.log(`[Process Image Job ${jobId}] Processing successful. Updating Redis status to 'completed'.`);
-        const completedData = {
-            ...jobData,
-            status: 'completed',
-            result: finalResult,
-            finishedAt: Date.now()
-        };
-        await redis.set(jobId, JSON.stringify(completedData)); // Use redis.set
-        console.log(`[Process Image Job ${jobId}] Redis updated successfully.`);
-        // ---------------------------------------------------
-
-        res.status(200).json({ message: 'Processing completed successfully.' });
 
     } catch (error) {
         console.error(`[Process Image Job ${jobId}] Error during background processing:`, error);
@@ -819,6 +787,150 @@ app.post('/api/send-to-instacart', async (req, res) => {
     }
     // ------------------------------------
 });
+
+// --- NEW Function: Process Text (Anthropic Stage 1) ---
+app.post('/api/process-text', async (req, res) => {
+    console.log(`[Process Text Handler] ===== FUNCTION HANDLER ENTERED =====`);
+    const { jobId } = req.body;
+    if (!jobId) {
+        console.error('[Process Text] Received request without Job ID.');
+        return res.status(400).json({ error: 'Missing Job ID.' });
+    }
+
+    // Security Check
+    const receivedTriggerSecret = req.headers['x-internal-trigger-secret'];
+    const expectedSecret = process.env.INTERNAL_TRIGGER_SECRET || 'default-secret';
+    console.log(`[Process Text Job ${jobId}] Received Trigger Secret (masked): ...${receivedTriggerSecret ? receivedTriggerSecret.slice(-4) : 'MISSING'}`);
+    if (receivedTriggerSecret !== expectedSecret) {
+        console.warn(`[Process Text Job ${jobId}] Invalid or missing trigger secret.`);
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    console.log(`[Process Text Job ${jobId}] Starting text processing (Anthropic Stage 1)...`);
+    let jobData;
+    try {
+        // --- Retrieve Job Details (including extractedText) from Redis ---
+        console.log(`[Process Text Job ${jobId}] Fetching job details from Redis...`);
+        if (!redis) { throw new Error('Redis client not initialized'); }
+        jobData = await redis.get(jobId);
+        if (!jobData) {
+            console.warn(`[Process Text Job ${jobId}] Job data not found in Redis. Aborting.`);
+            return res.status(200).json({ message: `Job data not found for ${jobId}, likely expired or invalid.` });
+        }
+
+        if (jobData.status !== 'vision_completed') {
+            console.warn(`[Process Text Job ${jobId}] Job status is '${jobData.status}', not 'vision_completed'. Skipping text processing.`);
+            return res.status(200).json({ message: `Job status (${jobData.status}) prevents text processing.` });
+        }
+
+        const { extractedText, originalFilename } = jobData; // Get extracted text
+        if (!extractedText || extractedText.trim().length === 0) {
+             console.warn(`[Process Text Job ${jobId}] No extracted text found in job data. Cannot proceed.`);
+             // Should not happen if vision_completed status is set correctly, but handle defensively
+             const failedData = { ...jobData, status: 'failed', error: 'No extracted text available for Anthropic call', finishedAt: Date.now() };
+             await redis.set(jobId, JSON.stringify(failedData));
+             return res.status(200).json({ message: 'No text to process.'});
+        }
+        console.log(`[Process Text Job ${jobId}] Retrieved extracted text. Length: ${extractedText.length}`);
+        // -------------------------------------------------------------
+
+        // --- Anthropic API Call (Stage 1 - Initial Extraction) ---
+        console.log(`[Process Text Job ${jobId}] Sending extracted text to Anthropic...`);
+        const systemPromptStage1 = `You are an expert recipe parser. Analyze the following recipe text extracted via OCR and extract key information. Output ONLY a valid JSON object.`;
+        const userPromptStage1 = `Recipe Text:\n---\n${extractedText}\n---\n\nExtract the recipe title, yield (quantity and unit, e.g., "4 servings", "2 cups"), and a list of ingredients.\nFor each ingredient, provide:\n- quantity: The numerical value (e.g., 0.5, 30, 1). Use null if not specified.\n- unit: The unit as written in the text (e.g., 'cup', 'cloves', 'tsp', 'sprigs', 'each', 'lb'). Use null if not specified or implied (like '1 lemon').\n- ingredient: The name of the ingredient as written, including descriptive words (e.g., 'extra-virgin olive oil', 'garlic cloves, peeled', 'kosher salt').\n\nOutput ONLY a single JSON object with keys "title", "yield" (an object with "quantity" and "unit"), and "ingredients" (an array of objects with "quantity", "unit", "ingredient"). Ensure the JSON is valid.`;
+
+        let rawJsonResponse = '';
+        try {
+            rawJsonResponse = await callAnthropic(systemPromptStage1, userPromptStage1); // Using existing helper
+            console.log(`[Process Text Job ${jobId}] Received response from Anthropic.`);
+        } catch (anthropicError) {
+            console.error(`[Process Text Job ${jobId}] Anthropic API call failed:`, anthropicError);
+            const failedData = { ...jobData, status: 'failed', error: `Anthropic API call failed: ${anthropicError.message}`, extractedText: extractedText, finishedAt: Date.now() };
+            await redis.set(jobId, JSON.stringify(failedData));
+            throw anthropicError; // Propagate to main catch
+        }
+        // ------------------------------------------------------
+
+        // --- Parse Stage 1 Response ---
+        let finalResult;
+         try {
+            const jsonMatch = rawJsonResponse.match(/```json\s*([\s\S]*?)\s*```/);
+            let jsonString = rawJsonResponse.trim();
+            if (jsonMatch && jsonMatch[1]) {
+                jsonString = jsonMatch[1].trim();
+            } else if (rawJsonResponse.startsWith('{') && rawJsonResponse.endsWith('}')) {
+                 console.log(`[Process Text Job ${jobId}] Anthropic response appears to be direct JSON.`);
+             } else {
+                const jsonStartIndex = rawJsonResponse.indexOf('{');
+                const jsonEndIndex = rawJsonResponse.lastIndexOf('}');
+                if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
+                    jsonString = rawJsonResponse.substring(jsonStartIndex, jsonEndIndex + 1);
+                    console.log(`[Process Text Job ${jobId}] Extracted potential JSON substring.`);
+                } else {
+                    throw new Error("Response does not contain ```json block or a valid JSON structure.");
+                }
+             }
+
+            const parsedData = JSON.parse(jsonString);
+            console.log(`[Process Text Job ${jobId}] Successfully parsed ${parsedData.ingredients?.length || 0} ingredients.`);
+
+            finalResult = { // Store the successful result
+                extractedText, // Keep extracted text for context if needed
+                title: parsedData.title,
+                yield: parsedData.yield,
+                ingredients: parsedData.ingredients
+            };
+
+        } catch (parseError) {
+            console.error(`[Process Text Job ${jobId}] Error parsing Stage 1 JSON response:`, parseError);
+            console.error(`[Process Text Job ${jobId}] Raw Response causing parse error:\n---\n${rawJsonResponse}\n---`);
+            const failedData = {
+                ...jobData,
+                status: 'failed',
+                error: `AI parsing failed: ${parseError.message}`,
+                rawResponse: rawJsonResponse, // Include raw response for debugging
+                finishedAt: Date.now()
+             };
+             await redis.set(jobId, JSON.stringify(failedData));
+             res.status(200).json({ message: 'Processing finished with parsing errors.' });
+             return; // Exit after setting failed status
+        }
+        // ---------------------------
+
+        // --- Update Redis with FINAL Completed Status and Result ---
+        console.log(`[Process Text Job ${jobId}] Text processing successful. Updating Redis status to 'completed'.`);
+        const completedData = {
+            ...jobData,
+            status: 'completed',
+            result: finalResult, // Store the parsed recipe data
+            anthropicFinishedAt: Date.now()
+        };
+        await redis.set(jobId, JSON.stringify(completedData));
+        console.log(`[Process Text Job ${jobId}] Redis updated successfully with final result.`);
+        // ---------------------------------------------------------
+
+        res.status(200).json({ message: 'Text processing completed successfully.' });
+
+    } catch (error) {
+        console.error(`[Process Text Job ${jobId}] Error during background text processing:`, error);
+        // Ensure Redis is updated to 'failed' if not already done
+        if (jobData && jobData.status !== 'failed') {
+            try {
+                 const updatePayload = { ...jobData, status: 'failed', error: `Text processing failed: ${error.message}`, finishedAt: Date.now() };
+                 await redis.set(jobId, JSON.stringify(updatePayload));
+                 console.log(`[Process Text Job ${jobId}] Updated Redis status to 'failed' due to processing error.`);
+             } catch (redisError) {
+                 console.error(`[Process Text Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' after error:`, redisError);
+             }
+        }
+        // Respond with 200 OK even on errors
+        if (!res.headersSent) {
+            res.status(200).json({ message: `Text processing failed for Job ID ${jobId}, status updated in Redis.` });
+        }
+    }
+});
+
+// --- End NEW Function ---
 
 // Basic route
 app.get('/', (req, res) => {
