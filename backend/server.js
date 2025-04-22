@@ -142,10 +142,11 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
         const triggerSecretToSend = process.env.INTERNAL_TRIGGER_SECRET || 'default-secret'; // Get the secret being sent
         const processImageUrl = `${baseUrl}/api/process-image`;
         console.log(`[Async Upload Job ${jobId}] Triggering background processing at: ${processImageUrl}`);
+        console.log(`[Async Upload Job ${jobId}] Trigger URL used: ${processImageUrl}`); // Log full URL for verification
         console.log(`[Async Upload Job ${jobId}] Sending trigger secret (masked): ...${triggerSecretToSend.slice(-4)}`); // Log masked secret
 
         // Use fetch for fire-and-forget - DO NOT await this
-        fetch(processImageUrl, {
+        fetch('/api/process-image', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -201,11 +202,12 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
 
 // Background processing endpoint (triggered by /api/upload)
 app.post('/api/process-image', async (req, res) => {
+    console.log(`[Process Image Handler] ===== FUNCTION HANDLER ENTERED =====`); // Log immediately
     // --- ADDED LOG AT VERY TOP ---
     console.log(`[Process Image Handler] ===== INVOKED =====`);
     console.log(`[Process Image Handler] Request Body:`, JSON.stringify(req.body));
     const receivedTriggerSecret = req.headers['x-internal-trigger-secret'];
-    console.log(`[Process Image Handler] Received Trigger Secret (masked): ...${receivedTriggerSecret ? receivedTriggerSecret.slice(-4) : 'MISSING'}`);
+    console.log(`[Process Image Handler] Received Trigger Secret (masked): ...${receivedTriggerSecret ? receivedTriggerSecret.slice(-4) : 'MISSING'}`); // Log received secret before check
     // --- END ADDED LOG ---
 
     // Basic security check (optional but recommended)
