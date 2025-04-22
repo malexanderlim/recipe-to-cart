@@ -161,7 +161,7 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
                  try {
                      const triggerFailData = { 
                          status: 'failed', 
-                         error: `Failed to trigger background process: ${fetchError.message}`,
+                         error: 'Failed to start background processing. Please try again.', // User-friendly message
                          originalFilename: originalFilename, // Include some context
                          createdAt: initialJobData.createdAt, // Keep original creation time
                          finishedAt: Date.now()
@@ -270,7 +270,7 @@ app.post('/api/process-image', async (req, res) => {
             } catch (convertError) {
                  console.error(`[Process Image Job ${jobId}] HEIC conversion failed:`, convertError);
                  // Update Redis to failed status
-                 const failedData = { ...jobData, status: 'failed', error: `HEIC conversion failed: ${convertError.message}`, finishedAt: Date.now() };
+                 const failedData = { ...jobData, status: 'failed', error: 'Image conversion failed. Please try a standard JPEG or PNG.', finishedAt: Date.now() };
                  await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
                  throw convertError; // Propagate error to main catch block
             }
@@ -293,7 +293,7 @@ app.post('/api/process-image', async (req, res) => {
              console.log(`[Process Image Job ${jobId}] Successfully extracted text from Vision API. Length: ${extractedText.length}`);
         } catch (visionError) {
              console.error(`[Process Image Job ${jobId}] Google Vision API call failed:`, visionError);
-             const failedData = { ...jobData, status: 'failed', error: `Google Vision API failed: ${visionError.message}`, finishedAt: Date.now() };
+             const failedData = { ...jobData, status: 'failed', error: 'Could not read text from the image.', finishedAt: Date.now() };
              await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
              throw visionError;
         }
@@ -331,7 +331,7 @@ app.post('/api/process-image', async (req, res) => {
             }).catch(async (fetchError) => {
                 console.error(`[Process Image Job ${jobId}] CRITICAL: Error triggering /api/process-text fetch:`, fetchError);
                 // Update status to failed if triggering the next step fails
-                const triggerFailData = { ...visionCompletedData, status: 'failed', error: `Failed to trigger text processing: ${fetchError.message}`, finishedAt: Date.now() };
+                const triggerFailData = { ...visionCompletedData, status: 'failed', error: 'Failed to continue processing after reading text.', finishedAt: Date.now() };
                 try {
                     await redis.set(jobId, JSON.stringify(triggerFailData));
                 } catch (redisError) {
@@ -363,8 +363,8 @@ app.post('/api/process-image', async (req, res) => {
         if (jobData && jobData.status !== 'failed') { // Avoid overwriting specific error messages
             try {
                  const updatePayload = jobData
-                     ? { ...jobData, status: 'failed', error: `Processing failed: ${error.message}`, finishedAt: Date.now() }
-                     : { status: 'failed', error: `Processing failed early: ${error.message}`, finishedAt: Date.now() };
+                     ? { ...jobData, status: 'failed', error: 'An error occurred while processing the image.', finishedAt: Date.now() }
+                     : { status: 'failed', error: 'An error occurred early in the processing pipeline.', finishedAt: Date.now() };
 
                 await redis.set(jobId, JSON.stringify(updatePayload)); // Use redis.set
                  console.log(`[Process Image Job ${jobId}] Updated Redis status to 'failed' due to processing error.`);
@@ -827,7 +827,7 @@ app.post('/api/process-text', async (req, res) => {
         if (!extractedText || extractedText.trim().length === 0) {
              console.warn(`[Process Text Job ${jobId}] No extracted text found in job data. Cannot proceed.`);
              // Should not happen if vision_completed status is set correctly, but handle defensively
-             const failedData = { ...jobData, status: 'failed', error: 'No extracted text available for Anthropic call', finishedAt: Date.now() };
+             const failedData = { ...jobData, status: 'failed', error: 'Could not find text data passed from the previous step.', finishedAt: Date.now() };
              await redis.set(jobId, JSON.stringify(failedData));
              return res.status(200).json({ message: 'No text to process.'});
         }
@@ -845,7 +845,7 @@ app.post('/api/process-text', async (req, res) => {
             console.log(`[Process Text Job ${jobId}] Received response from Anthropic.`);
         } catch (anthropicError) {
             console.error(`[Process Text Job ${jobId}] Anthropic API call failed:`, anthropicError);
-            const failedData = { ...jobData, status: 'failed', error: `Anthropic API call failed: ${anthropicError.message}`, extractedText: extractedText, finishedAt: Date.now() };
+            const failedData = { ...jobData, status: 'failed', error: 'Could not understand ingredients from the text.', extractedText: extractedText, finishedAt: Date.now() };
             await redis.set(jobId, JSON.stringify(failedData));
             throw anthropicError; // Propagate to main catch
         }
@@ -887,7 +887,7 @@ app.post('/api/process-text', async (req, res) => {
             const failedData = {
                 ...jobData,
                 status: 'failed',
-                error: `AI parsing failed: ${parseError.message}`,
+                error: 'Could not organize the extracted ingredients.',
                 rawResponse: rawJsonResponse, // Include raw response for debugging
                 finishedAt: Date.now()
              };
@@ -916,7 +916,7 @@ app.post('/api/process-text', async (req, res) => {
         // Ensure Redis is updated to 'failed' if not already done
         if (jobData && jobData.status !== 'failed') {
             try {
-                 const updatePayload = { ...jobData, status: 'failed', error: `Text processing failed: ${error.message}`, finishedAt: Date.now() };
+                 const updatePayload = { ...jobData, status: 'failed', error: 'An error occurred while analyzing the text.', finishedAt: Date.now() };
                  await redis.set(jobId, JSON.stringify(updatePayload));
                  console.log(`[Process Text Job ${jobId}] Updated Redis status to 'failed' due to processing error.`);
              } catch (redisError) {
