@@ -47,20 +47,30 @@ These issues directly impact the core value proposition or the demo user experie
     *   Goal: Allow users to review the final adjusted list and deselect items.
     *   Backend Action: `/api/create-list` returns adjusted list with `line_item_measurements`. `/api/send-to-instacart` accepts this structure. **(DONE)**
     *   Frontend Action: UI displays primary measurement, stores full data, handles correct submission. **(DONE)**
+*   **[X] Implement Asynchronous Image Processing:** Solved Vercel timeout issues using Vercel Blob, KV (Redis), and chained background functions (`/api/upload` -> `/api/process-image` -> `/api/process-text`).
+*   **[ ] Address Stuck Processing (`vision_completed` state):**
+    *   **Problem:** Occasionally, jobs get stuck in the `vision_completed` status and never proceed to the `/api/process-text` step (Anthropic analysis) or time out gracefully. The frontend polling eventually shows a generic timeout error, but the root cause seems to be the silent failure of the trigger between the two background functions.
+    *   **Investigation:** The `fetch` call from `/api/process-image` to `/api/process-text` might be failing intermittently without triggering the `.catch()` block, or the `redis.set` call *within* the `.catch()` block might be failing silently.
+    *   **Action 1 (Logging):** Add detailed logging *inside* the `fetch(...).catch()` block in `/api/process-image` to verify if it's executed during failures and if the subsequent `redis.set('failed', ...)` call succeeds or throws an error.
+    *   **Action 2 (Frontend Timeout - If Logging Inconclusive):** Implement a timeout mechanism in the frontend polling logic (`frontend/script.js`). If a job remains in an intermediate state (like `vision_completed`) for an extended period (e.g., 60 seconds), update the UI directly to show a timeout error, regardless of the backend status. This provides better UX than indefinite waiting.
 *   **[ ] Enhance Action Feedback & Loading/Progress:**
-    *   **Problem:** Basic loading indicators and lack of clear feedback on button clicks.
+    *   **Problem:** Basic loading indicators and lack of clear feedback on button clicks. Internal state names exposed. Attempt counts shown.
     *   **Action:**
         *   Implement integrated progress display during image processing (e.g., overall progress bar, status update per recipe card).
+        *   **[P0] Improve Status Messages:** In `frontend/script.js`, map internal job statuses (`pending`, `vision_completed`, `failed`, `completed`) to user-friendly text (e.g., "Uploading...", "Reading text...", "Analyzing ingredients...", "Error processing recipe", "Ready"). Hide raw status names like `vision_completed`.
+        *   **[P0] Hide Attempt Counter:** Remove the "(Attempt X)" display from the frontend processing messages. Internal retry logic is fine, but the count isn't useful user feedback.
         *   Add a loading spinner to the "Create Instacart List" button on click.
         *   On success, clearly display the "Open Instacart Shopping List" link (styled prominently, maybe like a button) and disable/hide the create button.
 *   **[ ] Implement Clear Error Handling:**
-    *   **Problem:** Unclear how errors are currently displayed to the user.
+    *   **Problem:** Unclear how errors are currently displayed to the user. Need to leverage improved backend error messages.
     *   **Action:** Ensure user-friendly error messages appear *in the UI* for:
-        *   Individual image processing failures (Vision/Claude errors, non-recipe images). Provide context if possible (e.g., "Couldn't read text from image X", "Failed to parse ingredients for recipe Y").
+        *   Individual image processing failures (Vision/Claude errors, non-recipe images). Retrieve the user-friendly error message from the `jobData.error` field provided by `/api/job-status` when `jobData.status === 'failed'`.
         *   `/api/create-list` call failures (Instacart API errors, network issues). Suggest retrying.
 *   **[ ] Add Contextual Instructions/Guidance:**
-    *   **Problem:** First-time users might need pointers for a smooth demo.
-    *   **Action:** Add brief, non-intrusive helper text. Examples: Under "Upload": `(Supports JPG, PNG, HEIC)`, Near checkboxes: `Uncheck items you already have`, Near yield: `Adjust servings if needed`, Near pantry toggle: `Quickly uncheck common staples`.
+    *   **Problem:** First-time users might need pointers for a smooth demo. Pantry text is slightly confusing.
+    *   **Action:**
+        *   **[P1] Simplify Pantry Text:** In `frontend/index.html`, change the label for "I have commonly found pantry items..." to remove the explanatory "(quickly unchecks these)".
+        *   Add brief, non-intrusive helper text. Examples: Under "Upload": `(Supports JPG, PNG, HEIC)`, Near checkboxes: `Uncheck items you already have`, Near yield: `Adjust servings if needed`.
 
 ## P1: Important for Polish
 
@@ -127,15 +137,18 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
     *   **UI/Error Feedback:** Does the UI clearly show progress, success, and handle errors gracefully? (Qualitative check)
 *   **[ ] Goal:** Aim for high scores (>80-90%) on Item Match and Variant Match for the test set, with clear UI feedback for all scenarios before the demo.
 
-**Execution Plan:**
+**Execution Plan (Revised):**
 
-1.  ~~Backend Refactor (Multi-Unit): Modify Stage 2 LLM prompt and post-processing...~~ (DONE, but being refactored again below)
-2.  **Backend Refactor (Consolidation):** Implement the revised hybrid approach ('LLM for Factors, Algo for Math') in `/api/create-list`.
+1.  ~~Backend Refactor (Multi-Unit): Modify Stage 2 LLM prompt and post-processing...~~ (DONE)
+2.  ~~Backend Refactor (Consolidation): Implement the revised hybrid approach ('LLM for Factors, Algo for Math') in `/api/create-list`.~~ (DONE)
 3.  ~~Frontend Update (Multi-Unit): Adjust `displayReviewList`, `handleSendToInstacart`...~~ (DONE)
-4.  **Enhance Frontend Feedback:** Improve loading indicators/error handling (especially for multi-step backend processing).
-5.  **Test & Refine:** Test full flow, focusing on consolidation accuracy, including edge cases, review step, deselection, prompt accuracy.
-6.  **Address P1:** Polish layout.
-7.  **Final Demo Run-through.**
+4.  ~~Implement Asynchronous Processing Backend: Split image processing across multiple functions to avoid timeouts.~~ (DONE)
+5.  **Troubleshoot Async Trigger:** Add detailed logging to the `fetch().catch()` block in `/api/process-image` to diagnose intermittent trigger failures. Deploy & Test.
+6.  **Enhance Frontend Feedback (P0):** Update status messages (map internal states, remove attempt counter). Deploy & Test.
+7.  **Enhance Frontend Error Handling (P0):** Display user-friendly error messages from backend job status. Deploy & Test.
+8.  **Address Stuck Processing (Frontend Fallback - P0/P1):** If backend logging is inconclusive or issue persists, implement frontend timeout logic for intermediate states. Deploy & Test.
+9.  **Polish UI/UX (P1):** Simplify pantry text, refine layout. Deploy & Test.
+10. **Final Demo Run-through.**
 
 ---
 

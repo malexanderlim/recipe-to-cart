@@ -328,14 +328,23 @@ app.post('/api/process-image', async (req, res) => {
                     // No Vercel Auth needed here assuming it's disabled globally
                 },
                 body: JSON.stringify({ jobId: jobId })
-            }).catch(async (fetchError) => {
-                console.error(`[Process Image Job ${jobId}] CRITICAL: Error triggering /api/process-text fetch:`, fetchError);
+            }).catch(async (fetchTriggerError) => {
+                // --- Enhanced Logging for Trigger Failure --- 
+                console.error(`[Process Image Job ${jobId}] CRITICAL: fetch() call to /api/process-text failed. Error:`, fetchTriggerError);
                 // Update status to failed if triggering the next step fails
-                const triggerFailData = { ...visionCompletedData, status: 'failed', error: 'Failed to continue processing after reading text.', finishedAt: Date.now() };
+                const triggerFailData = { 
+                    ...visionCompletedData, // Keep data from successful vision step
+                    status: 'failed', 
+                    error: 'Processing Error: Failed to start the final analysis step.', // Updated user-friendly error
+                    finishedAt: Date.now() 
+                };
                 try {
+                    console.log(`[Process Image Job ${jobId}] Attempting to update Redis to 'failed' due to trigger error...`);
                     await redis.set(jobId, JSON.stringify(triggerFailData));
-                } catch (redisError) {
-                     console.error(`[Process Image Job ${jobId}] Failed to update Redis after trigger error:`, redisError);
+                    console.log(`[Process Image Job ${jobId}] Successfully updated Redis status to 'failed' after trigger error.`);
+                } catch (redisSetError) {
+                     console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' AFTER the /api/process-text trigger failed! Error:`, redisSetError);
+                     // If this fails, the job might remain stuck in vision_completed
                 }
             });
 
