@@ -18,6 +18,8 @@ These issues directly impact the core value proposition or the demo user experie
                 *   Crucially, the LLM **does not perform quantity calculations** on the input list, only provides this conversion data dictionary.
             2.  **Algorithmic Consolidation (Post-LLM):**
                 *   **Map Conversion Data:** Create a lookup map from `normalized_name` -> conversion data object (primary unit, equivalent units map) returned by the LLM.
+                *   **Robust Parsing (DONE):** Implemented multi-stage parsing (regex, manual strip, raw parse, first bracket/brace) to handle LLM preambles and slightly malformed responses.
+                *   **Max Tokens (DONE):** Increased `max_tokens` in the `callAnthropic` helper to `4096` to prevent truncation of large JSON responses.
                 *   **Map Raw to Normalized (Optional Refinement):** Determine the mapping from each `rawIngredient` string to its LLM-provided `normalized_name`.
                 *   **Iterate Raw & Consolidate:** Initialize `consolidatedTotals = {}`. Loop through `rawIngredients`. For each `rawItem`:
                     *   Find its `normalized_name`.
@@ -50,26 +52,30 @@ These issues directly impact the core value proposition or the demo user experie
 *   **[X] Implement Asynchronous Image Processing:** Solved Vercel timeout issues using Vercel Blob, KV (Redis), and chained background functions (`/api/upload` -> `/api/process-image` -> `/api/process-text`).
 *   **[ ] Address Stuck Processing (`vision_completed` state):**
     *   **Problem:** Occasionally, jobs get stuck in the `vision_completed` status and never proceed to the `/api/process-text` step (Anthropic analysis) or time out gracefully. The frontend polling eventually shows a generic timeout error, but the root cause seems to be the silent failure of the trigger between the two background functions.
-    *   **Investigation:** The `fetch` call from `/api/process-image` to `/api/process-text` might be failing intermittently without triggering the `.catch()` block, or the `redis.set` call *within* the `.catch()` block might be failing silently.
-    *   **Action 1 (Logging):** Add detailed logging *inside* the `fetch(...).catch()` block in `/api/process-image` to verify if it's executed during failures and if the subsequent `redis.set('failed', ...)` call succeeds or throws an error.
-    *   **Action 2 (Frontend Timeout - If Logging Inconclusive):** Implement a timeout mechanism in the frontend polling logic (`frontend/script.js`). If a job remains in an intermediate state (like `vision_completed`) for an extended period (e.g., 60 seconds), update the UI directly to show a timeout error, regardless of the backend status. This provides better UX than indefinite waiting.
-*   **[ ] Enhance Action Feedback & Loading/Progress:**
+    *   **Investigation (DONE):** Added detailed logging. Confirmed that the `fetch` from `/api/process-image` to `/api/process-text` sometimes dispatches successfully but fails to invoke the target function *without* triggering the `.catch()` block. The job remains `vision_completed` in Redis.
+    *   **Action 1 (Mitigation - DONE):** Implemented a frontend timeout (`POLLING_TIMEOUT_MS = 20000`) in `frontend/script.js`. If polling detects the job hasn't progressed after 20s, it stops polling and displays a specific error message (\"Recipe analysis timed out...\" if last status was `vision_completed`, generic timeout otherwise).
+    *   **Action 2 (Required UX Improvement - TODO):** Currently, a timeout affects the whole batch. **Need to allow users to dismiss/remove *only* the specific recipe card that timed out** and potentially re-upload just that image, without clearing other successful results in the session. This likely involves:
+        *   Adding a 'close' or 'retry' button to the recipe card when it displays the timeout error.
+        *   Modifying `processSingleFile` or adding a new function to handle re-uploading for a specific card ID.
+        *   Ensuring `handleReviewList` correctly ignores dismissed/failed cards.
+*   **[X] Enhance Action Feedback & Loading/Progress:**
     *   **Problem:** Basic loading indicators and lack of clear feedback on button clicks. Internal state names exposed. Attempt counts shown.
     *   **Action:**
-        *   Implement integrated progress display during image processing (e.g., overall progress bar, status update per recipe card).
-        *   **[P0] Improve Status Messages:** In `frontend/script.js`, map internal job statuses (`pending`, `vision_completed`, `failed`, `completed`) to user-friendly text (e.g., "Uploading...", "Reading text...", "Analyzing ingredients...", "Error processing recipe", "Ready"). Hide raw status names like `vision_completed`.
-        *   **[P0] Hide Attempt Counter:** Remove the "(Attempt X)" display from the frontend processing messages. Internal retry logic is fine, but the count isn't useful user feedback.
-        *   Add a loading spinner to the "Create Instacart List" button on click.
-        *   On success, clearly display the "Open Instacart Shopping List" link (styled prominently, maybe like a button) and disable/hide the create button.
-*   **[ ] Implement Clear Error Handling:**
+        *   Implement integrated progress display during image processing (e.g., overall progress bar, status update per recipe card). (Deferred)
+        *   **[X] Improve Status Messages:** In `frontend/script.js`, mapped internal job statuses (`pending`, `vision_completed`) to user-friendly text (\"Processing image...\", \"Analyzing ingredients...\").
+        *   **[X] Hide Attempt Counter:** Removed the \"(Attempt X)\" display from the frontend processing messages.
+        *   Add a loading spinner to the \"Create Instacart List\" button on click.
+        *   On success, clearly display the \"Open Instacart Shopping List\" link (styled prominently, maybe like a button) and disable/hide the create button.
+*   **[X] Implement Clear Error Handling:**
     *   **Problem:** Unclear how errors are currently displayed to the user. Need to leverage improved backend error messages.
     *   **Action:** Ensure user-friendly error messages appear *in the UI* for:
-        *   Individual image processing failures (Vision/Claude errors, non-recipe images). Retrieve the user-friendly error message from the `jobData.error` field provided by `/api/job-status` when `jobData.status === 'failed'`.
+        *   Individual image processing failures (Vision/Claude errors, non-recipe images). Retrieve the user-friendly error message from the `jobData.error` field provided by `/api/job-status` when `jobData.status === 'failed'`. **(DONE via polling)**
+        *   Frontend timeout errors (specific message if stuck after vision step). **(DONE via timeout logic)**
         *   `/api/create-list` call failures (Instacart API errors, network issues). Suggest retrying.
-*   **[ ] Add Contextual Instructions/Guidance:**
+*   **[X] Add Contextual Instructions/Guidance:**
     *   **Problem:** First-time users might need pointers for a smooth demo. Pantry text is slightly confusing.
     *   **Action:**
-        *   **[P1] Simplify Pantry Text:** In `frontend/index.html`, change the label for "I have commonly found pantry items..." to remove the explanatory "(quickly unchecks these)".
+        *   **[X] Simplify Pantry Text:** In `frontend/index.html`, changed the label for "I have commonly found pantry items..." to remove the explanatory text.
         *   Add brief, non-intrusive helper text. Examples: Under "Upload": `(Supports JPG, PNG, HEIC)`, Near checkboxes: `Uncheck items you already have`, Near yield: `Adjust servings if needed`.
 
 ## P1: Important for Polish
@@ -142,13 +148,14 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
 1.  ~~Backend Refactor (Multi-Unit): Modify Stage 2 LLM prompt and post-processing...~~ (DONE)
 2.  ~~Backend Refactor (Consolidation): Implement the revised hybrid approach ('LLM for Factors, Algo for Math') in `/api/create-list`.~~ (DONE)
 3.  ~~Frontend Update (Multi-Unit): Adjust `displayReviewList`, `handleSendToInstacart`...~~ (DONE)
-4.  ~~Implement Asynchronous Processing Backend: Split image processing across multiple functions to avoid timeouts.~~ (DONE)
-5.  **Troubleshoot Async Trigger:** Add detailed logging to the `fetch().catch()` block in `/api/process-image` to diagnose intermittent trigger failures. Deploy & Test.
-6.  **Enhance Frontend Feedback (P0):** Update status messages (map internal states, remove attempt counter). Deploy & Test.
-7.  **Enhance Frontend Error Handling (P0):** Display user-friendly error messages from backend job status. Deploy & Test.
-8.  **Address Stuck Processing (Frontend Fallback - P0/P1):** If backend logging is inconclusive or issue persists, implement frontend timeout logic for intermediate states. Deploy & Test.
+4.  ~~Implement Asynchronous Processing Backend: Split image processing across multiple functions (`/api/process-image`, `/api/process-text`) to avoid timeouts.~~ (DONE)
+5.  ~~Troubleshoot Async Trigger & LLM Parsing: Added backend logging, refined LLM prompts, improved JSON parsing robustness, increased `max_tokens`.~~ (DONE)
+6.  ~~Enhance Frontend Feedback (P0): Updated status messages (map internal states, remove attempt counter).~~ (DONE)
+7. ~~Enhance Frontend Error Handling (P0): Display user-friendly error messages from backend job status polling.~~ (DONE)
+8.  ~~Address Stuck Processing (Frontend Fallback - P0/P1): Implemented frontend timeout logic with specific error message for `vision_completed` state.~~ (DONE)
 9.  **Polish UI/UX (P1):** Simplify pantry text, refine layout. Deploy & Test.
-10. **Final Demo Run-through.**
+10. **Implement Individual Timeout Handling (P0/P1 - Required UX):** Modify frontend to allow dismissing/retrying single timed-out recipe cards.
+11. **Final Demo Run-through.**
 
 ---
 

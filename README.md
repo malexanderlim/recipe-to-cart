@@ -10,6 +10,46 @@ A simple web application to extract ingredients from a recipe image and create a
 *   Allows scaling of recipe yield before adding to cart.
 *   Creates an Instacart shopping list using the Instacart Developer API (via `.env` key).
 
+## Technology Stack & Architecture
+
+This project utilizes a modern web stack and a serverless architecture designed to handle potentially long-running image processing tasks efficiently.
+
+**Languages & Frameworks:**
+
+*   **Frontend:** HTML5, CSS3, Vanilla JavaScript (ES6+)
+*   **Backend:** Node.js with Express.js
+
+**Key Services & APIs:**
+
+*   **Google Cloud Vision API:** Used for Optical Character Recognition (OCR) to extract raw text from uploaded recipe images.
+*   **Anthropic Claude API (Claude 3 Haiku):** Employed for Natural Language Processing (NLP) tasks:
+    *   Initial parsing of raw OCR text to extract structured recipe data (title, yield, ingredients).
+    *   Generating normalized ingredient names and purchasable unit conversion data for Instacart compatibility.
+*   **Instacart Connect API:** Used to create the final shopping list based on the processed ingredients.
+*   **Vercel Platform:**
+    *   **Serverless Functions:** Hosts the Node.js/Express backend API endpoints.
+    *   **Blob Storage:** Provides temporary storage for uploaded images before processing.
+    *   **KV (Upstash Redis):** Acts as a simple, fast database for managing asynchronous job status and intermediate results.
+
+**Core Libraries:**
+
+*   **Backend:** `express`, `cors`, `multer` (image upload handling), `@google-cloud/vision`, `@anthropic-ai/sdk`, `axios` (API calls), `heic-convert` (HEIC/HEIF image support), `@vercel/blob`, `@vercel/kv` (Vercel services integration), `dotenv` (environment variables).
+*   **Frontend:** No external libraries; relies on standard browser APIs (`fetch`, DOM manipulation).
+
+**Architectural Highlights:**
+
+*   **Asynchronous Processing Pipeline:** To overcome serverless function timeout limits (e.g., Vercel Hobby plan 10s limit), image processing is handled asynchronously:
+    1.  Frontend uploads image to a lightweight `/api/upload` endpoint.
+    2.  `/api/upload` stores the image in Vercel Blob, creates a job entry in Vercel KV (Redis), and immediately returns a `jobId`.
+    3.  `/api/upload` asynchronously triggers `/api/process-image` (via `fetch`, non-blocking).
+    4.  `/api/process-image` performs OCR (Vision API), updates job status in KV, and triggers `/api/process-text`.
+    5.  `/api/process-text` performs NLP parsing (Anthropic API) and updates KV with the final result or error.
+    6.  Frontend polls an `/api/job-status` endpoint using the `jobId` to retrieve the final status and results from KV.
+*   **Hybrid Ingredient Processing:** Combines LLM capabilities with deterministic backend logic:
+    *   An LLM call (`/api/create-list`) analyzes the initially parsed ingredients to suggest `normalized_name`, `primary_unit` (purchasable), and `equivalent_units` conversion factors based on Instacart standards.
+    *   Backend code then uses this LLM-generated data dictionary to perform the actual consolidation and unit conversion calculations reliably, avoiding LLM mathematical errors.
+*   **Robust Error Handling:** Includes specific error messages for various failure points (upload, OCR, NLP, timeout, API errors) propagated to the UI.
+
 ## Setup
 
 1.  **Clone the repository:**
