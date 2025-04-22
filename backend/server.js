@@ -168,316 +168,324 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
 
 
 // Endpoint to create Instacart list (incorporating Stage 2 LLM)
-// ********** THIS IS THE MODIFIED ENDPOINT **********
+// ********** V4: REFACTORED BASED ON 'Single LLM Call for Conversions, Algorithm for Consolidation' **********
 app.post('/api/create-list', async (req, res) => {
     const { ingredients: rawIngredients, title = 'My Recipe Ingredients' } = req.body;
-    console.log('Received request to create Instacart list (Stage 2 processing).'); // <-- New log
-    console.log('Raw ingredients received from frontend:', JSON.stringify(rawIngredients, null, 2)); // <-- New log
+    console.log('V7: Received request for /api/create-list.');
+    console.log('V7: Raw ingredients received:', JSON.stringify(rawIngredients, null, 2));
 
-
-    // --- Initial Checks ---
-    const instacartApiKey = process.env.INSTACART_API_KEY;
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-
     if (!rawIngredients || !Array.isArray(rawIngredients) || rawIngredients.length === 0) {
-        return res.status(400).json({ error: 'Invalid or missing ingredients data for Stage 2 processing.' });
+        return res.status(400).json({ error: 'Invalid or missing ingredients data.' });
     }
-    if (!instacartApiKey || !anthropicApiKey) {
-        console.error('API key(s) missing in environment variables (INSTACART_API_KEY or ANTHROPIC_API_KEY).');
-        return res.status(500).json({ error: 'Server configuration error: API key(s) not found.' });
+    if (!anthropicApiKey) {
+        console.error('Anthropic API key missing.');
+        return res.status(500).json({ error: 'Server configuration error: Anthropic API key not found.' });
     }
-    // ---------------------
 
-
-    let finalLineItems;
     try {
-        // --- Anthropic API Call (Stage 2 - Normalization & Consolidation) ---
-        const systemPromptStage2 = `You are an expert grocery shopping assistant. Your task is to take a list of ingredients compiled from recipes (potentially with scaled quantities), normalize them, convert units to standard Instacart units, consolidate duplicates accurately, and format them for the Instacart API. Prioritize accuracy in unit conversion and consolidation. Adhere strictly to the requested JSON output format.`; // Added strict format adherence
+        // --- Step 1: Single LLM Call for Normalization & Conversion Data ---
+        console.log("V7 Step 1: Calling LLM for normalization and conversion data (Instacart Doc Examples)...");
+        const systemPrompt = `You are an expert grocery shopping assistant simulating a shopper at a typical US grocery store. Your ONLY goal is to determine how recipe ingredients translate to standard PURCHASABLE units, using official Instacart unit guidance. Analyze the provided list of raw ingredients, identify unique conceptual items, and for each item, specify its common name, its PRIMARY PURCHASABLE unit, and conversion factors FROM that primary unit TO other relevant units. Respond ONLY with a valid JSON array.`;
 
-        // Reference: Common Instacart Units: oz, fl oz, lb, g, kg, each, bunch, package, can, cup, pint, head, large, medium, small
-        const userPromptStage2 = `Input Ingredient List (JSON array):
+        const uniqueIngredientStrings = [...new Set(rawIngredients.map(item => item.ingredient).filter(Boolean))];
+        
+        // V7 User Prompt: Incorporates diverse examples based on Instacart documentation
+        const userPrompt = `Raw Ingredient List Snapshot (for context):
 \`\`\`json
-${JSON.stringify(rawIngredients, null, 2)}
+${JSON.stringify(rawIngredients.slice(0, 20), null, 2)} ${rawIngredients.length > 20 ? '\n...' : ''}
 \`\`\`
 
+Unique Ingredient Strings Found:
+${uniqueIngredientStrings.join('\n')}
+
 Instructions:
-1.  **Normalize Ingredient Names:** Identify the core purchasable item. Merge common variations (peeled, minced, chopped, stemmed, leaves) into a base name but retain essential types (e.g., "dried oregano", "extra-virgin olive oil", "kosher salt", "greek-style yogurt"). Use lowercase.
-2.  **Standardize Units & Generate Measurements:** Convert recipe units to standard Instacart units (oz, fl oz, lb, g, kg, each, bunch, package, can, head). For each ingredient, determine the primary standardized unit and calculate the quantity. Where appropriate (e.g., for garlic, fresh herbs, tomatoes), ALSO determine a common secondary unit (like oz or lb) and calculate its quantity. 
-3.  **Apply Purchasable Quantity Rules:** For BOTH the primary and any secondary measurements generated:
-    *   Round UP quantities for countable units ('bunch', 'can', 'head', 'each') to the nearest whole number.
-    *   For fresh herbs converted to weight/volume, if the quantity is small (< ~2oz/~50g), adjust to quantity: 1, unit: 'bunch' or 'package'.
-    *   Ensure other weights/volumes are practical.
-4.  **Consolidate:** Combine items with the same normalized name.
-    *   If multiple entries exist for the *same* normalized item AND they use the *same* standard unit (e.g., multiple entries converted to 'oz'), sum their quantities for that unit.
-    *   If entries for the same normalized item use *different* standard units (e.g., 'cloves' vs 'heads'), DO NOT attempt to sum them across units. List their *individual* adjusted measurements separately within the \`line_item_measurements\` array for the consolidated item.
-5.  **Format Output:** Return ONLY a valid JSON array of objects. Each object MUST have keys:
-    *   "name" (string, normalized),
-    *   "line_item_measurements" (array of objects, each containing "unit" [string] and "quantity" [number] AFTER adjustments),
-    *   "original_quantity" (number), // Keep for context, might be null
-    *   "original_unit" (string) // Keep for context, might be null
-    Do not include any other text.
+Analyze the unique ingredients based on the snapshot and list provided. For each unique conceptual ingredient:
+1.  **Determine Normalized Name:** Provide the best single, common, lowercase name (e.g., "garlic", "fresh thyme", "olive oil", "rolled oats", "chicken broth").
+2.  **Identify PRIMARY PURCHASABLE Unit:** THIS IS CRITICAL. Reference the Instacart Units of Measurement guide. Determine the unit a shopper typically buys this item in at a standard US grocery store. THINK: Can you buy 'cloves' of garlic, or do you buy 'head'? Can you buy 'sprigs' of thyme, or 'bunch'/'package'? Can you buy 'ml' of milk, or 'gallon'/'quart'/'pint'? 
+    *   Use standard Instacart units reflecting how items are SOLD: oz, fl oz, lb, g, kg, each, bunch, package, can, cup, pint, head, large, medium, small, gallon, quart, liter, milliliter, tablespoon, teaspoon. Consider common container types if applicable (e.g., 'fl oz can', 'lb bag').
+    *   Examples of PRIMARY PURCHASABLE units: 'head' for garlic, 'bunch' or 'package' for fresh herbs, 'package' or 'oz' for dried bay leaves, 'each' for tomatoes/onions/lemons, 'lb' for apples/potatoes/chicken, 'oz' for cereal/butter, 'fl oz' or 'gallon'/'liter' for milk/juice, 'fl oz can' for soup, 'cup' or 'pint' for cream/yogurt.
+    *   DO NOT select non-purchasable units like 'clove', 'sprig', 'leaf', 'slice' as the primary unit.
+3.  **Provide Equivalent Units & Factors:** Create an 'equivalent_units' array relative to the PRIMARY PURCHASABLE unit.
+    *   'unit': A common unit name (lowercase). Include the primary unit itself. Use standard Instacart units.
+    *   'factor_from_primary': How many of this 'unit' are equivalent to ONE 'primary_unit'? (e.g., If primary is 'head' [garlic], for 'clove', factor_from_primary might be 10.0. If primary is 'gallon' [milk], for 'fl oz', factor_from_primary is 128.0. If primary is 'lb' [potatoes], for 'each' potato, factor_from_primary might be 2.5). Use null if conversion isn't practical.
 
-Example Input: [{"ingredient": "garlic cloves, peeled", "quantity": 30, "unit": "cloves"}]
-Example Output: [
-  {"name": "garlic", "line_item_measurements": [{"unit": "head", "quantity": 3}, {"unit": "oz", "quantity": 12}], "original_quantity": 30, "original_unit": "cloves"}
+Output Format: Respond ONLY with a single valid JSON array. Each object MUST have keys:
+*   "normalized_name" (string)
+*   "primary_unit" (string - MUST be the purchasable unit)
+*   "equivalent_units" (array of objects with 'unit' [string] and 'factor_from_primary' [number | null])
+
+Example Output Fragment (Based on Instacart Docs & Purchasable Units):
+\`\`\`json
+[
+  {
+    "normalized_name": "garlic", "primary_unit": "head",
+    "equivalent_units": [ { "unit": "head", "factor_from_primary": 1.0 }, { "unit": "clove", "factor_from_primary": 10.0 }, { "unit": "oz", "factor_from_primary": 4.0 } ]
+  },
+  {
+    "normalized_name": "fresh thyme", "primary_unit": "bunch", 
+    "equivalent_units": [ { "unit": "bunch", "factor_from_primary": 1.0 }, { "unit": "package", "factor_from_primary": 1.0 }, { "unit": "sprig", "factor_from_primary": 15.0 }, { "unit": "oz", "factor_from_primary": 0.5 } ]
+  },
+   {
+    "normalized_name": "rolled oats", "primary_unit": "oz", // Typically sold by weight
+    "equivalent_units": [ { "unit": "oz", "factor_from_primary": 1.0 }, { "unit": "cup", "factor_from_primary": 0.125 }, { "unit": "lb", "factor_from_primary": 0.0625 } ] // 1 oz = 1/8 cup, 1 oz = 1/16 lb
+  },
+  {
+    "normalized_name": "tomato", "primary_unit": "each", // Instacart recommendation
+    "equivalent_units": [ { "unit": "each", "factor_from_primary": 1.0 }, { "unit": "lb", "factor_from_primary": 0.33 } ] // ~3 tomatoes per lb
+  },
+  {
+    "normalized_name": "whole milk", "primary_unit": "gallon",
+    "equivalent_units": [ { "unit": "gallon", "factor_from_primary": 1.0 }, { "unit": "quart", "factor_from_primary": 4.0 }, { "unit": "pint", "factor_from_primary": 8.0 }, { "unit": "cup", "factor_from_primary": 16.0 }, { "unit": "fl oz", "factor_from_primary": 128.0 }, { "unit": "liter", "factor_from_primary": 3.785 } ]
+  },
+  {
+    "normalized_name": "bay leaf", "primary_unit": "package",
+    "equivalent_units": [ { "unit": "package", "factor_from_primary": 1.0 }, { "unit": "leaf", "factor_from_primary": 20.0 }, { "unit": "oz", "factor_from_primary": 0.25 } ]
+  }
 ]
-
-Example Input: [{"ingredient": "basil leaves", "quantity": 15, "unit": "g"}]
-Example Output: [
-  {"name": "basil", "line_item_measurements": [{"unit": "package", "quantity": 1}, {"unit": "oz", "quantity": 0.5}], "original_quantity": 15, "original_unit": "g"} // Note: 0.5oz might be adjusted later by algorithm if needed
-]
-
-Final Output JSON Array:
+\`\`\`
+Final JSON Output:
 `;
 
-        console.log("Calling Stage 2 LLM for preliminary processing..."); // Updated log text
-        const stage2Response = await callAnthropic(systemPromptStage2, userPromptStage2);
-        console.log("Raw Stage 2 LLM Response:", stage2Response); // <-- New log
+        const rawLlmResponse = await callAnthropic(systemPrompt, userPrompt);
+        console.log("V7: Raw LLM Response:", rawLlmResponse);
 
-        // --- Parse Stage 2 Response ---
+        // ... (Parsing and Validation logic remains the same) ...
+        let conversionDataList;
         try {
-            // Attempt to extract JSON potentially embedded in markdown first
-            let jsonString = stage2Response.trim();
+            let jsonString = rawLlmResponse.trim();
             const jsonMatch = jsonString.match(/```json\s*([\s\S]*?)\s*```/);
-            if (jsonMatch) {
-                console.log("Found JSON block in Stage 2 response.");
-                jsonString = jsonMatch[1].trim();
-            } else {
-                console.log("No JSON block found, attempting to parse entire Stage 2 response.");
-            }
-
-            let llmProcessedItems = JSON.parse(jsonString);
-
-             // --- Basic validation of LLM output structure ---
-            if (!Array.isArray(llmProcessedItems)) {
-                 throw new Error("Parsed response is not an array.");
-            }
-            // Check for required keys from LLM, allowing null for original quantity
-            if (llmProcessedItems.length > 0 && llmProcessedItems.some(item => 
-                 typeof item.name !== 'string' || 
-                 !Array.isArray(item.line_item_measurements) || 
-                 item.line_item_measurements.length === 0 ||
-                 item.line_item_measurements.some(m => typeof m.unit !== 'string' || typeof m.quantity !== 'number') ||
-                 // FIX: Allow original_quantity to be null
-                 (item.original_quantity !== null && typeof item.original_quantity !== 'number') ||
-                 // Allow original_unit to be null as well (Stage 1 might return null)
-                 (item.original_unit !== null && typeof item.original_unit !== 'string') 
-             )) { 
-                 // Log the specific item causing the validation failure for easier debugging
-                 const failingItem = llmProcessedItems.find(item => 
-                    typeof item.name !== 'string' || 
-                    !Array.isArray(item.line_item_measurements) || 
-                    item.line_item_measurements.length === 0 ||
-                    item.line_item_measurements.some(m => typeof m.unit !== 'string' || typeof m.quantity !== 'number') ||
-                    (item.original_quantity !== null && typeof item.original_quantity !== 'number') ||
-                    (item.original_unit !== null && typeof item.original_unit !== 'string')
-                 );
-                 console.error("Validation failed for item:", JSON.stringify(failingItem, null, 2));
-                 throw new Error(`Parsed array items missing required keys or have incorrect structure. Check item: ${JSON.stringify(failingItem)}`);
-             }
-             console.log("Stage 2 LLM preliminary processing successful.");
-
-            // --- START: Algorithmic Consolidation & Post-Processing --- 
-            console.log("Applying algorithmic consolidation and adjustments...");
+            if (jsonMatch) jsonString = jsonMatch[1].trim();
+            else console.warn("V7: LLM response did not contain JSON markdown block. Attempting to parse directly.");
+            conversionDataList = JSON.parse(jsonString);
             
-            const consolidatedItems = {}; // Use an object for easier grouping by name
-
-            llmProcessedItems.forEach(item => {
-                const name = item.name.toLowerCase();
-                if (!consolidatedItems[name]) {
-                    consolidatedItems[name] = { 
-                        name: item.name, 
-                        measurements: [] // Store all measurements before final consolidation
-                    };
+            if (!Array.isArray(conversionDataList)) throw new Error("LLM output is not an array.");
+            conversionDataList.forEach((item, index) => {
+                if (!item.normalized_name || !item.primary_unit || !Array.isArray(item.equivalent_units)) {
+                    throw new Error(`Item at index ${index} missing required keys.`);
                 }
-                // Add all measurements from this item (LLM might output multiple)
-                item.line_item_measurements.forEach(measurement => {
-                    // Store original unit info if available, might be useful for consolidation rules
-                    consolidatedItems[name].measurements.push({ 
-                        unit: measurement.unit.toLowerCase(), 
-                        quantity: measurement.quantity, 
-                        original_unit: item.original_unit?.toLowerCase()
-                    });
+                item.equivalent_units.forEach((eq, eqIndex) => {
+                    if (!eq.unit || eq.factor_from_primary === undefined) { 
+                         throw new Error(`Equivalent unit at index ${eqIndex} for item ${item.normalized_name} is invalid.`);
+                    }
                 });
             });
-
-            // Now process each consolidated group
-            const finalAdjustedItems = Object.values(consolidatedItems).map(groupedItem => {
-                const name = groupedItem.name.toLowerCase();
-                let finalMeasurements = [];
-
-                // --- Specific Garlic Consolidation Logic ---
-                if (name === 'garlic') {
-                    let totalHeads = 0;
-                    let totalCloves = 0;
-                    let otherMeasurements = []; // Keep track of non-head/clove measurements like 'oz'
-
-                    groupedItem.measurements.forEach(m => {
-                        if (m.unit === 'head') {
-                            totalHeads += m.quantity;
-                        } else if (m.unit === 'cloves') {
-                            totalCloves += m.quantity;
-                        } else {
-                            otherMeasurements.push(m); // Keep oz, etc.
-                        }
-                    });
-
-                    // Convert cloves to heads (using 10 cloves/head, rounding up)
-                    const headsFromCloves = totalCloves > 0 ? Math.ceil(totalCloves / 10) : 0;
-                    const finalTotalHeads = Math.ceil(totalHeads + headsFromCloves);
-                    
-                    if (finalTotalHeads > 0) {
-                        finalMeasurements.push({ unit: 'head', quantity: finalTotalHeads });
-                        console.log(`Consolidated garlic: ${totalHeads} heads + ${totalCloves} cloves -> ${finalTotalHeads} head(s)`);
-                    }
-                    
-                    // Add back any other measurements (like oz if provided by LLM)
-                    // Simple consolidation for oz: sum quantities if present
-                    const totalOz = otherMeasurements.filter(m => m.unit === 'oz').reduce((sum, m) => sum + m.quantity, 0);
-                    if (totalOz > 0) {
-                        finalMeasurements.push({ unit: 'oz', quantity: parseFloat(totalOz.toFixed(2)) });
-                    }
-                     // Add other non-oz, non-head, non-clove units if they existed
-                    otherMeasurements.filter(m => m.unit !== 'oz').forEach(m => finalMeasurements.push({unit: m.unit, quantity: m.quantity}));
-
-                } else {
-                    // --- General Consolidation Logic (Sum quantities for same unit) ---
-                    const unitMap = {}; // { unit: totalQuantity }
-                    groupedItem.measurements.forEach(m => {
-                        unitMap[m.unit] = (unitMap[m.unit] || 0) + m.quantity;
-                    });
-                    finalMeasurements = Object.entries(unitMap).map(([unit, quantity]) => ({ 
-                        unit, 
-                        quantity: parseFloat(quantity.toFixed(2)) // Ensure reasonable precision 
-                    }));
-                }
-                
-                 // --- Apply General Algorithmic Adjustments (like rounding up countable units) --- 
-                const countableUnits = ['bunch', 'can', 'head', 'each'];
-                const freshHerbs = ['basil', 'thyme', 'mint', 'parsley', 'cilantro', 'rosemary', 'dill', 'oregano'];
-                
-                finalMeasurements = finalMeasurements.map(measurement => {
-                    let adjustedQuantity = measurement.quantity;
-                    const unit = measurement.unit; // Already lowercase
-
-                    // Rule: Fresh herb bunch/package minimum (applied to 'bunch'/'package' units)
-                    // Note: Garlic rule is handled above
-                    if (freshHerbs.some(herb => name.includes(herb)) && (unit === 'bunch' || unit === 'package')) {
-                         if (adjustedQuantity < 1) {
-                             adjustedQuantity = 1;
-                             console.log(`Adjusted ${name} ${unit} minimum to 1`);
-                         }
-                         adjustedQuantity = Math.ceil(adjustedQuantity); // Ensure whole number for bunch/package
-                    }
-                     // Rule: Ensure countable units are whole numbers (round up)
-                    else if (countableUnits.includes(unit)) {
-                         // Round up only if it's not already an integer
-                         if (adjustedQuantity > 0 && adjustedQuantity !== Math.ceil(adjustedQuantity)) { 
-                            console.log(`Adjusted ${name} ${unit}: ${measurement.quantity} -> ${Math.ceil(adjustedQuantity)}`);
-                            adjustedQuantity = Math.ceil(adjustedQuantity);
-                         }
-                    }
-                    
-                    // Ensure quantity is at least a small positive number if it was > 0 originally
-                    if (measurement.quantity > 0 && adjustedQuantity <= 0) {
-                        adjustedQuantity = 0.01; 
-                    }
-
-                    return { unit: measurement.unit, quantity: adjustedQuantity };
-                });
-                // ---------------------------------------------------------------
-
-                // Return the final structure for the *next* step (frontend review)
-                return {
-                    name: groupedItem.name, // Use the originally cased name if desired, or keep lowercase
-                    line_item_measurements: finalMeasurements, 
-                };
-            });
-            console.log("Algorithmic consolidation & adjustments applied. Final List for Review:", JSON.stringify(finalAdjustedItems, null, 2));
-            // --- END: Algorithmic Consolidation & Post-Processing --- 
-
-            finalLineItems = finalAdjustedItems; // Use the adjusted list for response
-
+            console.log("V7: Successfully parsed conversion data from LLM.");
         } catch (parseError) {
-             console.error("Error parsing Stage 2 JSON response:", parseError);
-             throw new Error(`AI Normalization Failed: Could not parse valid line_items JSON array from Stage 2 response. Details: ${parseError.message}`);
+            console.error("V7: Error parsing LLM JSON response:", parseError);
+            throw new Error(`AI Processing Failed: Could not parse conversion data. Details: ${parseError.message}`);
         }
-        // --------------------------
 
-        // *** MODIFICATION START: Return the processed list, don't call Instacart yet ***
-        res.json({ 
-            processedIngredients: finalLineItems, 
-            originalTitle: title // Pass original title back too
-        }); 
-        // *** MODIFICATION END ***
-
-    } catch (llmError) {
-        console.error("Error during Stage 2 LLM processing:", llmError);
-        // Send error response to client
-        return res.status(500).json({
-            error: 'Failed to normalize or consolidate ingredients using AI.',
-            details: llmError.message // Provide the specific LLM error
+        // --- Step 2: Algorithmic Consolidation using LLM Data ---
+        console.log("V7 Step 2: Consolidating ingredients using LLM conversion data...");
+        // ... (Building conversionMap remains the same) ...
+        const conversionMap = new Map();
+        conversionDataList.forEach(item => {
+            const eqUnitsMap = new Map();
+            item.equivalent_units.forEach(eq => {
+                if (eq.unit && eq.factor_from_primary != null) {
+                     eqUnitsMap.set(eq.unit.toLowerCase(), eq.factor_from_primary);
+                }
+            });
+            conversionMap.set(item.normalized_name, {
+                primaryUnit: item.primary_unit.toLowerCase(),
+                equivalentUnits: eqUnitsMap
+            });
         });
-    }
-    
-    // --- REMOVE INSTACART API CALL FROM HERE --- 
-    /*
-    // --- Prepare and Call Instacart API ---
-    // Ensure finalLineItems is defined and is an array before proceeding
-     if (!finalLineItems || !Array.isArray(finalLineItems)) {
-         console.error("Stage 2 LLM processing resulted in invalid finalLineItems. Cannot call Instacart.");
-         return res.status(500).json({
-             error: 'Internal server error: Failed to obtain valid ingredient list after AI processing.',
-             details: 'finalLineItems was null or not an array.'
-         });
-     }
-
-    const instacartApiUrl = 'https://connect.dev.instacart.tools/idp/v1/products/products_link';
-    const instacartRequestBody = {
-        title: title,
-        link_type: 'shopping_list',
-        line_items: finalLineItems // Use the LLM-processed list
-    };
-
-    try {
-        console.log('Sending final request to Instacart API...'); // <-- Existing log
-        console.log('Instacart Request Body:', JSON.stringify(instacartRequestBody, null, 2)); // <-- Log the ACTUAL body being sent
-        console.log('Using Instacart API Key (masked):', `***${instacartApiKey.slice(-4)}`); // <-- Existing log
-
-        const response = await axios.post(instacartApiUrl, instacartRequestBody, {
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${instacartApiKey}`
+        console.log("V7: Built conversion map:", conversionMap);
+        
+        // V7: simpleNormalize remains the same as V5 (can be improved later if needed)
+        const simpleNormalize = (name) => name ? name.toLowerCase().replace(/\(.*?\)/g, '').replace(/\bleaves\b/g, 'leaf').replace(/\btomatoes\b/g, 'tomato').replace(/\bpotatoes\b/g, 'potato').replace(/\bonions\b/g, 'onion').replace(/\bcloves\b/g, 'clove').replace(/\bheads\b/g, 'head').replace(/,( smashed| minced| peeled| separated| chopped| stemmed| fresh| dried| bruised| whole| sliced| diced)/g, '').replace(/\'s$/, '').trim() : 'unknown';
+        
+        // ... (nameMapping logic remains the same) ...
+        const nameMapping = {};
+        rawIngredients.forEach(rawItem => {
+            if (!rawItem.ingredient) return;
+            const simpleRawName = simpleNormalize(rawItem.ingredient);
+            let foundMatch = false;
+            for (const normName of conversionMap.keys()) {
+                if (simpleRawName.includes(normName) || normName.includes(simpleRawName)) {
+                    nameMapping[rawItem.ingredient] = normName;
+                    foundMatch = true;
+                    break;
+                }
+            }
+            if (!foundMatch) {
+                 console.warn(`V7: Could not map raw ingredient '${rawItem.ingredient}' (simplified: '${simpleRawName}') to a normalized name from LLM output.`);
+                 nameMapping[rawItem.ingredient] = simpleRawName; 
             }
         });
+        
+        const consolidatedTotals = {}; 
 
-        console.log('Instacart API Response Status:', response.status); // <-- Existing log
-        // console.log('Instacart API Response Data:', response.data);
+        for (const rawItem of rawIngredients) {
+            if (!rawItem.ingredient || rawItem.quantity == null) continue;
+            
+            const normalizedName = nameMapping[rawItem.ingredient] || simpleNormalize(rawItem.ingredient);
+            const conversionData = conversionMap.get(normalizedName);
+            let rawUnit = rawItem.unit ? rawItem.unit.toLowerCase().trim() : null;
+            const rawQuantity = rawItem.quantity;
 
-        if (response.data && response.data.products_link_url) {
-            res.json({ instacartUrl: response.data.products_link_url });
-        } else {
-            console.error('Instacart API response missing products_link_url:', response.data);
-            throw new Error('Instacart API did not return a products_link_url.');
+            // V7: Refined fallback/error handling during consolidation
+            if (!conversionData) {
+                console.warn(`V7: No conversion data for '${normalizedName}'. Adding raw: ${rawQuantity} ${rawUnit || '(no unit)'}.`);
+                if (!consolidatedTotals[normalizedName]) consolidatedTotals[normalizedName] = { units: {}, failed: true }; // Mark as failed
+                 const unitToAdd = rawUnit || 'unknown_unit'; 
+                 consolidatedTotals[normalizedName].units[unitToAdd] = (consolidatedTotals[normalizedName].units[unitToAdd] || 0) + rawQuantity;
+                continue;
+            }
+
+            const primaryUnit = conversionData.primaryUnit;
+            const eqUnitsMap = conversionData.equivalentUnits;
+            let quantityInPrimary = 0;
+            let conversionSuccessful = false;
+
+            if (!rawUnit) {
+                if (primaryUnit === 'each') { 
+                     quantityInPrimary = rawQuantity;
+                     conversionSuccessful = true;
+                     console.log(`  V7: ${rawItem.ingredient} - Assuming unitless as primary unit 'each'`);
+                } else if (eqUnitsMap.has('leaf') && normalizedName.includes('leaf')) {
+                    rawUnit = 'leaf'; // Treat as leaf and proceed to lookup below
+                     console.log(`  V7: ${rawItem.ingredient} - Treating unitless as 'leaf' for conversion attempt.`);
+                } else {
+                    console.warn(`  V7: Cannot convert unitless '${rawItem.ingredient}' to primary unit '${primaryUnit}'. Adding raw.`);
+                    // Keep track of raw quantity if conversion fails
+                }
+            }
+
+            if (rawUnit && !conversionSuccessful) { // Attempt conversion only if needed and not already handled
+                if (rawUnit === primaryUnit) {
+                    quantityInPrimary = rawQuantity;
+                    conversionSuccessful = true;
+                } else {
+                    let factorFromPrimary = null;
+                    const singularRawUnit = rawUnit.endsWith('s') && !rawUnit.endsWith('ss') ? rawUnit.slice(0, -1) : null; 
+                    
+                    if (eqUnitsMap.has(rawUnit)) {
+                        factorFromPrimary = eqUnitsMap.get(rawUnit);
+                    } else if (singularRawUnit && eqUnitsMap.has(singularRawUnit)) { 
+                        factorFromPrimary = eqUnitsMap.get(singularRawUnit);
+                        console.log(`  V7: Matched plural raw unit '${rawUnit}' to singular map key '${singularRawUnit}' for ${normalizedName}`);
+                    }
+                    
+                    if (factorFromPrimary != null && factorFromPrimary > 0) {
+                        const factorToPrimary = 1.0 / factorFromPrimary;
+                        quantityInPrimary = rawQuantity * factorToPrimary;
+                        conversionSuccessful = true;
+                        console.log(`  V7: Converted ${rawQuantity} ${rawUnit} of ${normalizedName} to ${quantityInPrimary.toFixed(3)} ${primaryUnit}`);
+                    } else {
+                        console.warn(`  V7: Unit '${rawUnit}' (or singular) not found/invalid factor for ${normalizedName}. Cannot convert to primary '${primaryUnit}'. Adding raw.`);
+                    }
+                }
+            }
+            
+            // Accumulate totals
+            if (!consolidatedTotals[normalizedName]) consolidatedTotals[normalizedName] = { units: {}, primaryUnit: primaryUnit }; // Store primary unit
+            
+            if (conversionSuccessful) {
+                consolidatedTotals[normalizedName].units[primaryUnit] = (consolidatedTotals[normalizedName].units[primaryUnit] || 0) + quantityInPrimary;
+                // Calculate secondary units only if primary conversion worked
+                ['oz', 'fl oz'].forEach(secondaryUnit => {
+                     if (secondaryUnit === primaryUnit) return;
+                     if (eqUnitsMap.has(secondaryUnit)) {
+                         const factorFromPrimaryForSecondary = eqUnitsMap.get(secondaryUnit);
+                         if (factorFromPrimaryForSecondary > 0) {
+                              const quantityInSecondary = quantityInPrimary * factorFromPrimaryForSecondary;
+                              if (quantityInSecondary > 0) {
+                                   consolidatedTotals[normalizedName].units[secondaryUnit] = (consolidatedTotals[normalizedName].units[secondaryUnit] || 0) + quantityInSecondary;
+                              }
+                         }
+                     }
+                });
+            } else {
+                 // Add raw quantity if conversion failed
+                 const unitToAdd = rawUnit || 'unknown_unit';
+                 consolidatedTotals[normalizedName].units[unitToAdd] = (consolidatedTotals[normalizedName].units[unitToAdd] || 0) + rawQuantity;
+                 consolidatedTotals[normalizedName].failed = true; // Mark that at least one conversion failed
+            }
         }
+        console.log("V7: Consolidated totals before adjustments:", JSON.stringify(consolidatedTotals, null, 2));
+        // --- End Step 2 ---
 
-    } catch (instacartError) {
-        console.error('Error creating Instacart list:', instacartError.response ? JSON.stringify(instacartError.response.data) : instacartError.message); // Log full error data if available
-        const errorDetails = instacartError.response ? instacartError.response.data : instacartError.message;
-        const statusCode = instacartError.response ? instacartError.response.status : 500;
-         res.status(statusCode).json({
-            error: 'Failed to create Instacart list.',
-            details: errorDetails,
-            llm_output_sent: finalLineItems // Include what was sent to help debug
+        // --- Step 3: Final Adjustments & Formatting ---
+        console.log("V7 Step 3: Applying final adjustments...");
+        const finalAdjustedItems = [];
+        const countableUnits = ['bunch', 'can', 'head', 'each', 'large', 'medium', 'small', 'package', 'pint'];
+        const freshHerbs = ['basil', 'thyme', 'mint', 'parsley', 'cilantro', 'rosemary', 'dill', 'oregano'];
+
+        for (const normalizedName in consolidatedTotals) {
+            const itemData = consolidatedTotals[normalizedName];
+            const measurements = itemData.units;
+            const primaryUnit = itemData.primaryUnit || Object.keys(measurements)[0] || 'each'; // Use stored primary or fallback
+            let finalMeasurements = [];
+
+            for (const [unit, quantity] of Object.entries(measurements)) {
+                if (quantity <= 0 || unit === 'unknown_unit') continue; // Skip zero/negative/unknown
+                
+                let adjustedQuantity = quantity;
+                const isCountable = countableUnits.includes(unit);
+                const isHerb = freshHerbs.some(herb => normalizedName.includes(herb));
+
+                // Adjustment 1: Round up countable units
+                if (isCountable) {
+                    const rounded = Math.ceil(adjustedQuantity);
+                    if (rounded > adjustedQuantity) {
+                         console.log(`  Adjusting ${normalizedName} ${unit}: ${adjustedQuantity.toFixed(3)} -> ${rounded} (Ceiling)`);
+                         adjustedQuantity = rounded;
+                    }
+                    adjustedQuantity = Math.max(1, Math.round(adjustedQuantity)); 
+                }
+
+                // Adjustment 2: Minimum 1 for fresh herbs in bunch/package
+                 if (isHerb && (unit === 'bunch' || unit === 'package') && adjustedQuantity > 0 && adjustedQuantity < 1) {
+                     console.log(`  Adjusting ${normalizedName} ${unit}: ${adjustedQuantity.toFixed(3)} -> 1 (Herb Minimum)`);
+                     adjustedQuantity = 1; 
+                 }
+                 
+                 // Ensure reasonable precision for non-countable
+                 if (!isCountable) adjustedQuantity = parseFloat(adjustedQuantity.toFixed(2));
+                 
+                 if (quantity > 0 && adjustedQuantity <= 0) adjustedQuantity = 0.01; 
+
+                 if (adjustedQuantity > 0) {
+                    finalMeasurements.push({ unit, quantity: adjustedQuantity });
+                 }
+            }
+            
+            // Sort measurements: primary unit first, then alpha
+            finalMeasurements.sort((a, b) => {
+                 if (a.unit === primaryUnit) return -1; 
+                 if (b.unit === primaryUnit) return 1;
+                 return a.unit.localeCompare(b.unit); 
+            });
+
+            if (finalMeasurements.length > 0) {
+                 // If conversion failed for any part of this item, maybe add a note?
+                 // For now, just use the normalized name.
+                 finalAdjustedItems.push({ name: normalizedName, line_item_measurements: finalMeasurements });
+            }
+        }
+        console.log("V7: Final adjusted items ready for review:", JSON.stringify(finalAdjustedItems, null, 2));
+        // --- End Step 3 ---
+
+        res.json({ 
+            processedIngredients: finalAdjustedItems, 
+            originalTitle: title
+        }); 
+
+    } catch (error) {
+        console.error("V7: Error during /api/create-list processing:", error);
+        return res.status(500).json({
+            error: 'Failed to process ingredients list.',
+            details: error.message
         });
     }
-    */
-    // ------------------------------------
 });
 
 
-// *** NEW ENDPOINT: Send final list to Instacart ***
+// Endpoint to create Instacart list (incorporating Stage 2 LLM)
+// ********** THIS IS THE REFACTORED ENDPOINT BASED ON THE REVISED HYBRID PLAN **********
 app.post('/api/send-to-instacart', async (req, res) => {
     const { ingredients, title } = req.body; // Expect final list and title
     console.log('Received request to send final list to Instacart.');
@@ -495,7 +503,7 @@ app.post('/api/send-to-instacart', async (req, res) => {
     // ---------------------
     
     // --- Prepare and Call Instacart API ---
-    const instacartApiUrl = 'https://connect.dev.instacart.tools/idp/v1/products/products_link';
+    const instacartApiUrl = 'https://connect.dev.instacart.tools/idp/v1/products/products_link'; // Use DEV URL for testing
     const instacartRequestBody = {
         title: title || 'My Recipe Ingredients', 
         link_type: 'shopping_list',

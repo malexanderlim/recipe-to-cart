@@ -6,21 +6,43 @@
 
 These issues directly impact the core value proposition or the demo user experience and MUST be addressed.
 
-*   **[ ] Fix Ingredient Consolidation:**
-    *   **Problem:** Duplicate ingredients (garlic, thyme) appear in the Instacart API request, indicating consolidation isn't happening correctly before the API call. `requirements.md` says frontend handles this.
-    *   **Action:** Investigate frontend JavaScript (`frontend/script.js`) where the final list is aggregated. Ensure consolidation logic runs *before* constructing the payload for the `/api/create-list` endpoint. Combine items with the same normalized name, summing quantities appropriately (handling unit conversions carefully).
-*   **[ ] Review & Refine Backend Unit Normalization (`backend/server.js`):**
+*   **[X] Fix Ingredient Consolidation & Normalization (Revised Hybrid Approach V2 - SUCCESSFUL):**
+    *   **P0 Addendum: Fixing Mixed-Unit Ingredient Consolidation (Garlic Example) - Strategy V2**
+        *   **1. Problem Statement:** Previous attempts using multiple LLM calls or single calls with complex instructions failed due to LLM math errors, latency, or inability to handle context correctly (e.g., garlic cloves vs heads). The core issue is reliably consolidating diverse units while leveraging LLM knowledge without relying on its math.
+        *   **2. Goal:** Reliably consolidate ingredients with mixed convertible units using a single LLM call for knowledge and robust backend logic for calculations.
+        *   **3. Proposed Solution: Single LLM Call for Conversions, Algorithm for Consolidation (Implemented & Verified)**
+            1.  **Single LLM Call (Normalization & Conversion Data):** Make a single call to the LLM (Haiku initially) with the entire `rawIngredients` list. The LLM's task is to identify *unique conceptual ingredients* and for each, provide:
+                *   A canonical `normalized_name`.
+                *   The `primary_unit` (most common purchasable unit).
+                *   `equivalent_units`: A list/map defining conversion factors *FROM* the primary unit *TO* other common units (e.g., 1 'head' [primary] = 10 'cloves' [factor: 10.0], 1 'head' = 4 'oz' [factor: 4.0]).
+                *   Crucially, the LLM **does not perform quantity calculations** on the input list, only provides this conversion data dictionary.
+            2.  **Algorithmic Consolidation (Post-LLM):**
+                *   **Map Conversion Data:** Create a lookup map from `normalized_name` -> conversion data object (primary unit, equivalent units map) returned by the LLM.
+                *   **Map Raw to Normalized (Optional Refinement):** Determine the mapping from each `rawIngredient` string to its LLM-provided `normalized_name`.
+                *   **Iterate Raw & Consolidate:** Initialize `consolidatedTotals = {}`. Loop through `rawIngredients`. For each `rawItem`:
+                    *   Find its `normalized_name`.
+                    *   Look up its `conversionData`.
+                    *   Calculate the `factor_to_primary` for the `rawItem.unit` by inverting the LLM's `factor_from_primary` (e.g., `1.0 / equivalent_units['clove'].factor_from_primary`). Handle primary unit (factor=1) and missing units.
+                    *   Calculate `quantity_in_primary = rawItem.quantity * factor_to_primary`.
+                    *   Add this value to `consolidatedTotals[normalized_name][primary_unit]`.
+                    *   (Optional) Calculate and add totals for 'oz'/'fl oz' similarly.
+            3.  **Final Adjustments:** Iterate `consolidatedTotals`. Apply `Math.ceil` to countable primary units, apply minimums, format the final `line_item_measurements` array for each normalized item.
+        *   **4. Detailed Implementation Steps:** **(DONE)**
+            *   **Backend (`server.js` - `/api/create-list`):** Refactor the endpoint entirely. Define the new single prompt. Implement the LLM call. Implement the post-LLM consolidation loop using inverse factors. Implement final adjustments.
+            *   **LLM Prompt:** Carefully design the prompt to extract the conversion data structure reliably.
+            *   **Logging:** Add detailed logging for the single LLM I/O, the conversion data map, the consolidation loop, and final adjustments.
+        *   **5. Potential Risks & Alternatives:**
+            *   **LLM Data Quality:** Haiku might provide inaccurate/incomplete conversion data. Backend logic needs safety checks. May still need Sonnet if Haiku fails this task.
+            *   **Matching Raw to Normalized:** Reliably mapping raw ingredient strings to the LLM's normalized name might require refinement (e.g., simple algo + LLM confirmation).
+        *   **6. Verification:** Test with garlic case (expecting 9 heads). Test other complex cases (sprigs, weights, volumes). **(Verified Successful)**
+*   **[ ] Review & Refine Backend Unit Normalization (`backend/server.js`):** (Partially addressed by consolidation fix, but review other aspects like herb/wine normalization)
     *   **Problem:** Current normalization (e.g., cloves->each, tsp->bunch) leads to inaccurate quantities and incorrect product matching by Instacart (fresh vs dried oregano, whole vs minced garlic, cooking vs table wine).
     *   **Action (General):** Implement robust logging of original extracted units vs. normalized units to easily trace issues during testing.
-    *   **Action (Garlic):** Re-evaluate `cloves` -> `each`. Is quantity considered? Should we map groups of cloves (e.g., 6-10) to `head` or `each`? Strip potentially confusing descriptors ("smashed", "peeled") before sending the name, but maybe retain in `display_text`?
     *   **Action (Herbs):** How did `1 tsp dried oregano` become `1 bunch`? Check LLM output and backend logic. Ensure "dried" is preserved and influences normalization (perhaps map to `oz` or `package` instead of `bunch`?). Re-evaluate `tsp`/`tbsp`/`sprigs` -> `bunch`/`package` - needs to be more nuanced.
     *   **Action (Wine):** Clarify "dry white wine" to something less ambiguous like "white table wine" or "Sauvignon Blanc" if identifiable, to avoid matching with "cooking wine".
     *   **Action (Leverage Instacart Units):** Based on [Instacart API Docs](https://docs.instacart.com/developer_platform_api/api/units_of_measurement), explore using the `Measurement` array for ambiguous items. If unsure if a vendor uses `each` vs `oz` for garlic, potentially send `[{"unit": "each", "quantity": 1}, {"unit": "oz", "quantity": 4}]` (example values) to increase match likelihood. This needs careful implementation based on common conversions.
 *   **[X] Fix Instacart API 401 Error:** ...
-*   **[X] Implement Two-Stage LLM Processing + Hybrid Adjustment:** 
-    *   Strategy: Combined LLM (Stage 1: Extraction, Stage 2: Normalization + Multi-Unit Generation) with backend algorithmic adjustments. **(DONE)**
-    *   Stage 1 (Backend `/api/upload`): LLM extracts structured data ...
-    *   Stage 2 (Backend `/api/create-list`): LLM generates `line_item_measurements`. Backend code applies final adjustments. **(DONE)**
+*   **[X] Implement Two-Stage LLM Processing + Hybrid Adjustment:** (Refactored Successfully in V7)
 *   **[X] Implement Final List Review Step (P0/P1):**
     *   Goal: Allow users to review the final adjusted list and deselect items.
     *   Backend Action: `/api/create-list` returns adjusted list with `line_item_measurements`. `/api/send-to-instacart` accepts this structure. **(DONE)**
@@ -107,16 +129,17 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
 
 **Execution Plan:**
 
-1.  ~~Backend Refactor (Multi-Unit): Modify Stage 2 LLM prompt and post-processing...~~ (DONE)
-2.  ~~Frontend Update (Multi-Unit): Adjust `displayReviewList`, `handleSendToInstacart`...~~ (DONE)
-3.  **Enhance Frontend Feedback:** Improve loading indicators/error handling.
-4.  **Test & Refine:** Test full flow, including edge cases, review step, deselection, prompt accuracy.
-5.  **Address P1:** Polish layout.
-6.  **Final Demo Run-through.**
+1.  ~~Backend Refactor (Multi-Unit): Modify Stage 2 LLM prompt and post-processing...~~ (DONE, but being refactored again below)
+2.  **Backend Refactor (Consolidation):** Implement the revised hybrid approach ('LLM for Factors, Algo for Math') in `/api/create-list`.
+3.  ~~Frontend Update (Multi-Unit): Adjust `displayReviewList`, `handleSendToInstacart`...~~ (DONE)
+4.  **Enhance Frontend Feedback:** Improve loading indicators/error handling (especially for multi-step backend processing).
+5.  **Test & Refine:** Test full flow, focusing on consolidation accuracy, including edge cases, review step, deselection, prompt accuracy.
+6.  **Address P1:** Polish layout.
+7.  **Final Demo Run-through.**
 
 ---
 
-Let me know if this revised plan aligns with your vision for crushing Demo Day! 
+Let me know if this revised plan aligns with your vision for crushing Demo Day!
 
 ## Asynchronous Processing Technical Design Document (TDD)
 
@@ -213,7 +236,8 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
 
 ---
 
-## Asynchronous Processing Technical Design Document (TDD)
+## Asynchronous Processing Technical Design Document (TDD) 
+(Duplicate TDD Section - Preserved as found in original)
 
 **1. Problem Statement:**
 
@@ -304,11 +328,12 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
 *   Frontend displays a "processing" state immediately after upload.
 *   Frontend UI updates correctly with parsed results or specific error messages once processing finishes.
 
-**Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit.
+**Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit. 
 
 ---
 
-## Asynchronous Processing Technical Design Document (TDD)
+## Asynchronous Processing Technical Design Document (TDD) 
+(Duplicate TDD Section - Preserved as found in original)
 
 **1. Problem Statement:**
 
