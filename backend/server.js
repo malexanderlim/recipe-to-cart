@@ -206,10 +206,10 @@ app.post('/api/process-image', async (req, res) => {
     console.log(`[Process Image Handler] ===== INVOKED =====`); // Restore original log
     const receivedTriggerSecret = req.headers['x-internal-trigger-secret']; // Restore variable
 
-    // --- ENTIRE BODY COMMENTED OUT FOR TESTING ---
-    /*
     // Basic security check (optional but recommended)
-    const triggerSecret = req.headers['x-internal-trigger-secret'];
+    console.log(`[Process Image Handler] Received Trigger Secret (masked): ...${receivedTriggerSecret ? receivedTriggerSecret.slice(-4) : 'MISSING'}`);
+
+    // Basic security check (optional but recommended)
     if (receivedTriggerSecret !== (process.env.INTERNAL_TRIGGER_SECRET || 'default-secret')) { // Compare received vs expected
         console.warn('[Process Image] Received request with invalid or missing trigger secret.');
         return res.status(403).json({ error: 'Forbidden' });
@@ -404,28 +404,11 @@ ${rawJsonResponse}
                  console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' after error:`, redisError);
              }
         }
-         // Respond with an error status, though the frontend relies on polling Redis
-        // It's better to return 200 OK here to prevent Redis from retrying the function on failure.
-        // The failure is recorded in Redis, which the frontend will see.
-        if (!res.headersSent) {
-            // res.status(500).json({ error: `Processing failed for Job ID: ${jobId}`, details: error.message });
-            res.status(200).json({ message: `Processing failed for Job ID ${jobId}, status updated in Redis.` });
-        }
-    }
-    */
-    // --- END COMMENTED OUT SECTION ---
-
-    // Send a simple response for testing invocation
-    try {
-        console.log('[Process Image Handler] Reached end of simplified function. Sending test response.');
-        res.status(200).send({ message: 'Process-image handler invoked successfully (minimal test).' });
-    } catch (responseError) {
-        // Log if sending the response itself fails for some reason
-        console.error('[Process Image Handler] CRITICAL: Failed to send simplified response:', responseError);
-        // Ensure headers aren't already sent if we somehow get here after an error
-        if (!res.headersSent) {
-            res.status(500).send({ error: 'Failed to send response from simplified handler.'});
-        }
+         // Respond with 200 OK even on errors, as the status is updated in Redis.
+         // This prevents Vercel/Redis from potentially retrying the function.
+         if (!res.headersSent) {
+             res.status(200).json({ message: `Processing failed for Job ID ${jobId}, status updated in Redis.` });
+         }
     }
 });
 
