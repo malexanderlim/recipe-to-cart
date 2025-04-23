@@ -1504,8 +1504,10 @@ app.post('/api/process-url-job', async (req, res) => {
 
                  if (ingredientStrings.length > 0) {
                     // ** Use updated prompt **
-                    const ingredientsPrompt = `The following ingredient strings were extracted from a recipe's structured data (JSON-LD). Parse them for grocery shopping list creation. For each string, identify the quantity (number or null), unit (string or null, using common units like cup, tsp, tbsp, oz, lb, g, kg, each, etc.), and the ingredient name (string). Ingredient List:\\n${ingredientStrings.map(s => `- ${s}`).join('\\n')}\\n\\nCRITICAL INSTRUCTION: Respond ONLY with a single **valid** JSON array [{quantity, unit, name}]. Do NOT include ANY other text, explanations, or markdown formatting. Ensure the JSON syntax is perfect.`;
-                    const ingredientsSystemPrompt = "You are an expert ingredient parser assisting with grocery list creation for Instacart. Convert raw ingredient strings into a JSON array of objects [{quantity, unit, name}]. Use null for missing quantity or unit. Respond ONLY with the **valid** JSON array itself, starting with [ and ending with ].";
+                    // Changed key 'name' to 'ingredient' for consistency
+                    const ingredientsPrompt = `The following ingredient strings were extracted from a recipe's structured data (JSON-LD). Parse them for grocery shopping list creation. For each string, identify the quantity (number or null), unit (string or null, using common units like cup, tsp, tbsp, oz, lb, g, kg, each, etc.), and the ingredient description (string). Ingredient List:\\n${ingredientStrings.map(s => `- ${s}`).join('\\n')}\\n\\nCRITICAL INSTRUCTION: Respond ONLY with a single **valid** JSON array [{quantity, unit, ingredient}]. Do NOT include ANY other text, explanations, or markdown formatting. Ensure the JSON syntax is perfect.`;
+                    // Changed key 'name' to 'ingredient' for consistency
+                    const ingredientsSystemPrompt = "You are an expert ingredient parser assisting with grocery list creation for Instacart. Convert raw ingredient strings into a JSON array of objects [{quantity, unit, ingredient}]. Use null for missing quantity or unit. Respond ONLY with the **valid** JSON array itself, starting with [ and ending with ].";
 
                     await updateJobStatus(jobId, 'llm_parsing_ingredients');
                     const llmIngredientsResponse = await callAnthropic(ingredientsSystemPrompt, ingredientsPrompt);
@@ -1514,13 +1516,14 @@ app.post('/api/process-url-job', async (req, res) => {
                     const llmIngredientsResult = await parseAndCorrectJson(jobId, llmIngredientsResponse, 'array'); // <-- INTEGRATED CALL
 
                     if (llmIngredientsResult) { // Check if correction helper returned a result
-                        const validIngredients = llmIngredientsResult.filter(item => typeof item === 'object' && item !== null && 'name' in item)
-                            .map(item => ({ quantity: item.quantity ?? null, unit: item.unit ?? null, name: item.name })); // Ensure nulls
+                        // Changed mapping from 'name' to 'ingredient'
+                        const validIngredients = llmIngredientsResult.filter(item => typeof item === 'object' && item !== null && 'ingredient' in item)
+                            .map(item => ({ quantity: item.quantity ?? null, unit: item.unit ?? null, ingredient: item.ingredient })); // Ensure nulls and use 'ingredient' key
                         if (validIngredients.length > 0) {
                             // Use the parsedYield from above
                             recipeResult = { title, yield: parsedYield, ingredients: validIngredients, sourceUrl: finalUrl };
                             console.log(`[${jobId}] Successfully parsed ${validIngredients.length} ingredients via LLM from JSON-LD (after potential correction).`);
-                        } else { console.warn(`[${jobId}] LLM JSON-LD result was valid array, but content lacked required structure.`); }
+                        } else { console.warn(`[${jobId}] LLM JSON-LD result was valid array, but content lacked required structure (missing 'ingredient' key?).`); } // Updated warning
                     } else { console.warn(`[${jobId}] Could not get valid ingredient array from LLM for JSON-LD, even after correction attempt.`); }
                  } else { console.log(`[${jobId}] No valid ingredient strings found in JSON-LD.`); }
              } else { console.log(`[${jobId}] No valid Recipe JSON-LD found or ingredients missing/empty.`); }
@@ -1546,10 +1549,10 @@ app.post('/api/process-url-job', async (req, res) => {
                  const fallbackTitle = article.title || 'Recipe from URL'; // Use title from Readability
 
                  // ** Use updated prompt **
-                 // Updated prompt to request yield as an object
-                 const fallbackPrompt = `Please analyze the following text content from a recipe webpage to extract information for a grocery list. Identify: \\n1. The recipe title (string).\\n2. The recipe yield as a JSON object { "quantity": number|null, "unit": string|null } (e.g., { "quantity": 4, "unit": "servings" }, { "quantity": 1, "unit": "dozen" }, or null if unclear).\\n3. A list of ingredients. For each ingredient, determine the quantity (number or null), unit (string or null, use common units like cup, tsp, tbsp, oz, lb, g, kg, each, etc.), and the ingredient name (string). \\nIgnore cooking instructions, comments, ads, and other non-essential text. \\nRecipe Text:\\n---\\n${mainTextContent}\\n---\\n\\nCRITICAL INSTRUCTION: Respond ONLY with a single **valid** JSON object containing the keys "title", "yield" (object or null), and "ingredients" (array). Ensure the JSON syntax is perfect. Do NOT include ANY other text, explanations, or markdown formatting.`;
-                 // Updated system prompt for yield object
-                 const fallbackSystemPrompt = "You are an expert recipe parser assisting with grocery list creation for Instacart. Extract the recipe title, yield, and ingredients from the provided text. Output ONLY a **valid** JSON object with keys `title` (string), `yield` (object `{ quantity, unit }` or null), and `ingredients` (array of objects `[{quantity, unit, name}]`). Use null for missing quantity or unit values.";
+                 // Updated prompt to request yield as an object and ingredient key
+                 const fallbackPrompt = `Please analyze the following text content from a recipe webpage to extract information for a grocery list. Identify: \\n1. The recipe title (string).\\n2. The recipe yield as a JSON object { "quantity": number|null, "unit": string|null } (e.g., { "quantity": 4, "unit": "servings" }, { "quantity": 1, "unit": "dozen" }, or null if unclear).\\n3. A list of ingredients. For each ingredient, determine the quantity (number or null), unit (string or null, use common units like cup, tsp, tbsp, oz, lb, g, kg, each, etc.), and the ingredient description (string, use key 'ingredient'). \\nIgnore cooking instructions, comments, ads, and other non-essential text. \\nRecipe Text:\\n---\\n${mainTextContent}\\n---\\n\\nCRITICAL INSTRUCTION: Respond ONLY with a single **valid** JSON object containing the keys "title", "yield" (object or null), and "ingredients" (array of objects with keys {quantity, unit, ingredient}). Ensure the JSON syntax is perfect. Do NOT include ANY other text, explanations, or markdown formatting.`;
+                 // Updated system prompt for yield object and ingredient key
+                 const fallbackSystemPrompt = "You are an expert recipe parser assisting with grocery list creation for Instacart. Extract the recipe title, yield, and ingredients from the provided text. Output ONLY a **valid** JSON object with keys `title` (string), `yield` (object `{ quantity, unit }` or null), and `ingredients` (array of objects `[{quantity, unit, ingredient}]`). Use null for missing quantity or unit values.";
 
                  await updateJobStatus(jobId, 'llm_parsing_fallback');
                  const llmFallbackResponse = await callAnthropic(fallbackSystemPrompt, fallbackPrompt);
@@ -1558,8 +1561,9 @@ app.post('/api/process-url-job', async (req, res) => {
                  const llmFallbackResult = await parseAndCorrectJson(jobId, llmFallbackResponse, 'object'); // <-- INTEGRATED CALL
 
                  if (llmFallbackResult && Array.isArray(llmFallbackResult.ingredients)) { // Check if correction helper returned a result
-                     const validIngredients = llmFallbackResult.ingredients.filter(item => typeof item === 'object' && item !== null && 'name' in item && item.name.trim() !== '')
-                         .map(item => ({ quantity: item.quantity ?? null, unit: item.unit ?? null, name: item.name })); // Ensure nulls
+                     // Changed filter/map to use 'ingredient' key
+                     const validIngredients = llmFallbackResult.ingredients.filter(item => typeof item === 'object' && item !== null && 'ingredient' in item && item.ingredient.trim() !== '')
+                         .map(item => ({ quantity: item.quantity ?? null, unit: item.unit ?? null, ingredient: item.ingredient })); // Ensure nulls and use 'ingredient' key
                      if (validIngredients.length > 0) {
                          // --- Correctly assign yield object --- 
                          const parsedYield = (typeof llmFallbackResult.yield === 'object' && llmFallbackResult.yield !== null) 
@@ -1574,11 +1578,11 @@ app.post('/api/process-url-job', async (req, res) => {
                          // -------------------------------------
                          console.log(`[${jobId}] Successfully parsed ${validIngredients.length} ingredients via LLM fallback (after potential correction). Yield:`, parsedYield);
                      } else {
-                         console.warn(`[${jobId}] LLM fallback returned ingredients array, but items lacked structure or name. Result:`, llmFallbackResult);
+                         console.warn(`[${jobId}] LLM fallback returned ingredients array, but items lacked structure or the 'ingredient' key. Result:`, llmFallbackResult); // Updated warning
                          throw new Error('LLM fallback extracted no valid ingredients.');
                      }
                  } else {
-                     console.warn(`[${jobId}] LLM fallback failed to return valid structured data. Result:`, llmFallbackResult);
+                     console.warn(`[${jobId}] LLM fallback failed to return valid structured data (missing ingredients array?). Result:`, llmFallbackResult); // Updated warning
                      throw new Error('Failed to extract recipe details using fallback LLM method.');
                  }
             } catch (fallbackError) {

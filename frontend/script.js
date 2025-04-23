@@ -299,7 +299,7 @@ document.addEventListener('DOMContentLoaded', () => {
                          displayQuantity = displayQuantity.toString(); 
                      }
                      const unit = itemData.unit || '';
-                     const ingredientName = itemData.name || '';
+                     const ingredientName = itemData.ingredient || '';
                      const text = `${displayQuantity} ${unit} ${ingredientName}`.replace(/\s+/g, ' ').trim();
                      label.textContent = text; // Update the text of the existing label
                  }
@@ -338,8 +338,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 displayQuantity = displayQuantity.toString(); 
             }
             const unit = item.unit || '';
-            const ingredientName = item.name || '';
-            const text = `${displayQuantity} ${unit} ${ingredientName}`.replace(/\s+/g, ' ').trim();
+            const ingredient = item.ingredient || '';
+            const text = `${displayQuantity} ${unit} ${ingredient}`.replace(/\s+/g, ' ').trim();
             
             // Unique ID for the checkbox and label association
             const checkboxId = `ingredient-${recipeData.id}-${index}`;
@@ -414,15 +414,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     .filter(item => (item.checked === undefined || item.checked === true)) 
                     .map(item => {
                         let finalQuantity = item.quantity;
+                        // Apply scaling ONLY if the original quantity is numeric
                         if (item.quantity !== null && typeof item.quantity === 'number' && recipeData.scaleFactor !== 1) {
                             finalQuantity = parseFloat((item.quantity * recipeData.scaleFactor).toFixed(2));
-                            if (finalQuantity <= 0 && item.quantity > 0) finalQuantity = 0.01;
+                            // Prevent scaling down to zero for non-zero original quantities
+                            if (finalQuantity <= 0 && item.quantity > 0) finalQuantity = 0.01; 
                         }
                         hasCheckedIngredients = true;
                         return {
                             ingredient: item.ingredient || 'Unknown Ingredient',
                             quantity: finalQuantity,
-                            unit: item.unit || 'each'
+                            unit: item.unit // Keep original unit (or null) for backend processing
                         };
                     });
 
@@ -820,7 +822,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // --- Original logic applied to recipeInfo --- 
             if (recipeInfo.ingredients && recipeInfo.ingredients.length > 0) {
                 recipeInfo.ingredients.forEach((item, index) => {
-                    const ingredientNameLower = (item.name || '').toLowerCase(); // Use item.name
+                    const ingredientNameLower = (item.ingredient || '').toLowerCase(); // Use item.ingredient
                     // Check if the ingredient name contains any common keyword
                     const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
                     
