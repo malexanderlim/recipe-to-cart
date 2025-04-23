@@ -7,9 +7,18 @@ const { redis } = require('../services/redisService');
 async function triggerBackgroundJob(jobId) {
     const port = process.env.PORT || 3001; 
     const isVercel = process.env.VERCEL === '1';
-    const triggerUrl = isVercel
-        ? '/api/process-url-job' // Relative path should work on Vercel
-        : `http://localhost:${port}/api/process-url-job`;
+    
+    // Construct absolute URL for fetch
+    let triggerUrl;
+    if (isVercel) {
+        // Ensure VERCEL_URL starts with https://
+        const baseUrl = process.env.VERCEL_URL.startsWith('http') 
+            ? process.env.VERCEL_URL 
+            : `https://${process.env.VERCEL_URL}`;
+        triggerUrl = `${baseUrl}/api/process-url-job`;
+    } else {
+        triggerUrl = `http://localhost:${port}/api/process-url-job`;
+    }
 
     console.log(`[${jobId}] Triggering background job at: ${triggerUrl}`);
     
