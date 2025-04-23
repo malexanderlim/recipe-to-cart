@@ -5,7 +5,7 @@ const { callAnthropic } = require('../services/anthropicService');
  * Parse recipe data from HTML content
  * @param {string} html - HTML content to parse
  * @param {string} url - URL of the recipe
- * @returns {Object} - Parsed recipe data
+ * @returns {Object} - Parsed recipe data (title, ingredients)
  */
 async function parseRecipeData(html, url) {
   const $ = cheerio.load(html);
@@ -19,24 +19,28 @@ async function parseRecipeData(html, url) {
   }
   
   // If still no data, try enhancing with AI
+  // Focus AI enhancement only if title or ingredients are missing
   if (!recipeData.title || !recipeData.ingredients.length) {
     recipeData = await enhanceRecipeWithAI(html, recipeData);
   }
   
-  return recipeData;
+  // Return only title and ingredients
+  return { 
+    title: recipeData.title,
+    ingredients: recipeData.ingredients
+  };
 }
 
 /**
  * Extract recipe data from structured JSON-LD
  * @param {Object} $ - Cheerio instance
- * @returns {Object} - Extracted recipe data
+ * @returns {Object} - Extracted recipe data (title, ingredients)
  */
 function extractStructuredData($) {
   const recipeData = {
     title: '',
-    ingredients: [],
-    instructions: '',
-    image: ''
+    ingredients: []
+    // Removed instructions and image
   };
   
   // Look for JSON-LD schema
@@ -44,145 +48,148 @@ function extractStructuredData($) {
   $('script[type="application/ld+json"]').each((i, elem) => {
     try {
       const json = JSON.parse($(elem).html());
-      if (json['@type'] === 'Recipe' || (json['@graph'] && json['@graph'].find(item => item['@type'] === 'Recipe'))) {
-        jsonLdSchema = json['@type'] === 'Recipe' ? json : json['@graph'].find(item => item['@type'] === 'Recipe');
+      // Simplified check for Recipe type
+      const potentialRecipe = json['@type'] === 'Recipe' ? json : 
+                             (json['@graph'] && Array.isArray(json['@graph'])) ? json['@graph'].find(item => item['@type'] === 'Recipe') : null;
+      if (potentialRecipe) {
+        jsonLdSchema = potentialRecipe;
+        return false; // Stop searching once found
       }
     } catch (e) {
-      console.error('Error parsing JSON-LD:', e);
+      // Ignore parsing errors silently for now, as some scripts might be invalid
+      // console.error('Error parsing JSON-LD:', e);
     }
   });
   
   if (jsonLdSchema) {
     recipeData.title = jsonLdSchema.name || '';
     
-    if (jsonLdSchema.image) {
-      if (typeof jsonLdSchema.image === 'string') {
-        recipeData.image = jsonLdSchema.image;
-      } else if (jsonLdSchema.image.url) {
-        recipeData.image = jsonLdSchema.image.url;
-      } else if (Array.isArray(jsonLdSchema.image) && jsonLdSchema.image.length > 0) {
-        const firstImage = jsonLdSchema.image[0];
-        recipeData.image = typeof firstImage === 'string' ? firstImage : (firstImage.url || '');
-      }
-    }
+    // Removed image extraction logic
     
     if (jsonLdSchema.recipeIngredient && Array.isArray(jsonLdSchema.recipeIngredient)) {
-      recipeData.ingredients = jsonLdSchema.recipeIngredient;
+      // Filter out any non-string entries, just in case
+      recipeData.ingredients = jsonLdSchema.recipeIngredient.filter(ing => typeof ing === 'string');
     }
     
-    if (jsonLdSchema.recipeInstructions) {
-      if (Array.isArray(jsonLdSchema.recipeInstructions)) {
-        recipeData.instructions = jsonLdSchema.recipeInstructions
-          .map(instruction => {
-            if (typeof instruction === 'string') return instruction;
-            if (instruction.text) return instruction.text;
-            return '';
-          })
-          .filter(text => text)
-          .join('\n');
-      } else {
-        recipeData.instructions = jsonLdSchema.recipeInstructions;
-      }
-    }
+    // Removed instructions extraction logic
   }
   
   return recipeData;
 }
 
 /**
- * Extract recipe data using generic patterns
+ * Extract recipe data using generic patterns (fallback)
  * @param {Object} $ - Cheerio instance
  * @param {string} url - URL of the recipe
- * @returns {Object} - Extracted recipe data
+ * @returns {Object} - Extracted recipe data (title, ingredients)
  */
 function extractSiteSpecificData($, url) {
   const recipeData = {
     title: '',
-    ingredients: [],
-    instructions: '',
-    image: ''
+    ingredients: []
+    // Removed instructions and image
   };
   
   // Generic extraction based on common patterns
   recipeData.title = $('h1').first().text().trim();
   
-  // Try to find ingredients
-  $('ul li').each((i, elem) => {
-    const text = $(elem).text().trim();
-    if (text && text.length > 3 && text.length < 200) {
-      recipeData.ingredients.push(text);
-    }
-  });
-  
-  // Try to find instructions
-  const instructionsText = [];
-  $('ol li').each((i, elem) => {
-    const text = $(elem).text().trim();
-    if (text) {
-      instructionsText.push(text);
-    }
-  });
-  recipeData.instructions = instructionsText.join('\n');
-  
-  // Try to find image
-  const firstImage = $('img').first();
-  if (firstImage.attr('src')) {
-    recipeData.image = firstImage.attr('src');
+  // Try to find ingredients - simplified selector
+  // Look for list items within elements having classes/ids often containing 'ingredient'
+  const potentialIngredientLists = $('[class*="ingredient"], [id*="ingredient"] ul, ul[class*="ingredient"], ul[id*="ingredient"]');
+  let foundIngredients = [];
+  if (potentialIngredientLists.length > 0) {
+     potentialIngredientLists.find('li').each((i, elem) => {
+       const text = $(elem).text().trim();
+       // Basic filtering for plausible ingredient lines
+       if (text && text.length > 3 && text.length < 200 && /\d/.test(text)) { // Require a digit 
+         foundIngredients.push(text);
+       }
+     });
   }
+  // Fallback to any top-level <ul> if specific selectors fail
+  if (foundIngredients.length === 0) {
+      $('ul > li').each((i, elem) => {
+          const text = $(elem).text().trim();
+           if (text && text.length > 3 && text.length < 200 && /\d/.test(text)) { 
+             foundIngredients.push(text);
+          }
+      });
+  }
+  recipeData.ingredients = foundIngredients;
+  
+  // Removed instructions extraction logic
+  
+  // Removed image extraction logic
   
   return recipeData;
 }
 
 /**
- * Enhance recipe data using AI
+ * Enhance recipe data using AI (if extraction fails)
  * @param {string} html - HTML content
- * @param {Object} existingData - Existing recipe data
- * @returns {Object} - Enhanced recipe data
+ * @param {Object} existingData - Existing recipe data (title, ingredients)
+ * @returns {Object} - Enhanced recipe data (title, ingredients)
  */
 async function enhanceRecipeWithAI(html, existingData) {
+  // Only enhance if necessary fields are missing
+  if (existingData.title && existingData.ingredients.length > 0) {
+    return existingData;
+  }
+
   try {
+    // Simplified prompt focusing only on title and ingredients
     const prompt = `
-You are an expert recipe extraction assistant. I need you to extract recipe details from this HTML.
+You are an expert recipe extraction assistant. Analyze this HTML to extract the recipe title and ingredients list.
+
 The current extracted data is:
 Title: "${existingData.title || 'Unknown'}"
 Ingredients: ${existingData.ingredients.length ? existingData.ingredients.join(', ') : 'None found'}
-Instructions: ${existingData.instructions || 'None found'}
 
-Please extract or improve the following recipe information from the HTML. Return ONLY a JSON object with these fields:
-1. title - the recipe title
-2. ingredients - an array of ingredient strings (each item should be a separate ingredient)
-3. instructions - the full cooking instructions as a string with newlines between steps
+Please extract or improve the following from the HTML. Return ONLY a JSON object with these fields:
+1. title: the recipe title (string)
+2. ingredients: an array of ingredient strings (each item should be a separate ingredient)
 
-HTML:
+HTML (first 15000 chars):
 ${html.substring(0, 15000)}
 `;
 
-    const response = await callAnthropic({
-      messages: [{ role: 'user', content: prompt }],
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 4000,
-    });
+    // Use the existing anthropic service call
+    const responseText = await callAnthropic(
+      "Extract recipe title and ingredients. Respond ONLY with a valid JSON object {title: string, ingredients: string[]}.", // System prompt
+      prompt, // User prompt
+      'claude-3-haiku-20240307', // Model
+      2000 // Reduced max_tokens as we expect less output
+    );
 
-    if (response && response.content) {
-      const content = response.content[0].text;
-      // Extract JSON from the response
-      const jsonMatch = content.match(/```(?:json)?\s*({[\s\S]*?})\s*```/) || 
-                       content.match(/{[\s\S]*?}/);
+    if (responseText) {
+      // Extract JSON from the response - simplified extraction
+      const jsonMatch = responseText.match(/{\s*"title"\s*:[\s\S]*?}/);
                        
-      if (jsonMatch) {
-        const parsedData = JSON.parse(jsonMatch[1] || jsonMatch[0]);
-        return {
-          title: parsedData.title || existingData.title,
-          ingredients: parsedData.ingredients || existingData.ingredients,
-          instructions: parsedData.instructions || existingData.instructions
-        };
+      if (jsonMatch && jsonMatch[0]) {
+        try {
+            const parsedData = JSON.parse(jsonMatch[0]);
+            // Return enhanced data, preferring newly parsed data if valid
+            return {
+              title: parsedData.title && typeof parsedData.title === 'string' ? parsedData.title : existingData.title,
+              ingredients: Array.isArray(parsedData.ingredients) && parsedData.ingredients.length > 0 ? parsedData.ingredients.filter(i => typeof i === 'string') : existingData.ingredients,
+            };
+        } catch (parseError) {
+             console.error('AI response JSON parsing failed:', parseError, '\nResponse text:', responseText);
+             // Fallback to existing data if parsing fails
+             return existingData; 
+        }
+      } else {
+          console.warn('AI response did not contain expected JSON structure.', '\nResponse text:', responseText);
       }
+    } else {
+        console.warn('AI service returned empty response.');
     }
     
+    // Fallback to existing data if AI call fails or yields no usable result
     return existingData;
   } catch (error) {
     console.error('Error enhancing recipe with AI:', error);
-    return existingData;
+    return existingData; // Return existing data on error
   }
 }
 
