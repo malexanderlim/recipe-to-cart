@@ -85,6 +85,66 @@ These improve the experience but are secondary to core functionality and feedbac
 *   **[ ] Refine Layout & Flow:**
     *   **Problem:** Pantry toggle placement is slightly awkward. Minor visual inconsistencies.
     *   **Action:** Experiment with relocating the "Pantry Item Toggle" (e.g., below "2. Extracted Recipes" heading or inside "3. Create Instacart List" section). Perform a quick visual pass for consistent spacing, alignment, and element styling (buttons, cards, etc.).
+*   **[ ] Refactor Backend (`backend/server.js`) for Modularity (P1):**
+    *   **Problem:** The `server.js` file is excessively long (1600+ lines), mixing routing, business logic, external API calls, and utility functions, hindering maintainability and testing.
+    *   **Refactoring Checklist & Status:**
+        *   **Dependencies (`require` statements):**
+            *   `[X] dotenv`: (`server.js` or config file) - Assumed still needed in main server file.
+            *   `[X] express`: (`server.js`, `routes/*`) - Present in routes.
+            *   `[X] cors`: (`server.js`) - Likely stays in main server file.
+            *   `[X] multer`: (`server.js`, `routes/uploadRoutes.js`) - Used in upload route.
+            *   `[X] google-auth-library`: (Handled implicitly by `@google-cloud/vision`) - Implicitly handled.
+            *   `[X] @google-cloud/vision`: (`services/googleVisionService.js`) - Service exists.
+            *   `[X] @anthropic-ai/sdk`: (`services/anthropicService.js`) - Service exists.
+            *   `[X] axios`: (`services/instacartService.js`) - Used in Instacart service.
+            *   `[X] heic-convert`: (`controllers/processImageController.js`) - Required in controller.
+            *   `[X] @vercel/blob`: (`controllers/uploadController.js`) - Required in upload controller.
+            *   `[X] crypto`: (Used across controllers/utils) - Standard Node module.
+            *   `[X] @vercel/kv`: (`services/kvService.js`, `controllers/*`) - Service exists, used in controllers.
+            *   `[X] jsdom`: (`controllers/urlJobController.js`) - Required in controller.
+            *   `[X] @mozilla/readability`: (`controllers/urlJobController.js`) - Required in controller.
+            *   `[X] cheerio`: (`utils/recipeParser.js`, `controllers/urlJobController.js`) - Required in utils and controller.
+            *   `[X] @upstash/redis`: (`services/redisService.js`, `controllers/*`) - Service exists, used in controllers.
+        *   **Initializations:**
+            *   `[X] Upstash Redis Client (`redis`)`: (`services/redisService.js` -> imported) - Service exists.
+            *   `[X] Vercel KV Client (`kvClient`)`: (`services/kvService.js` -> imported) - Service exists (handles mock logic).
+            *   `[X] Anthropic Client (`anthropic`)`: (`services/anthropicService.js` -> imported) - Service exists.
+            *   `[X] Express App (`app`)`: (`server.js`) - Stays in main server file.
+            *   `[X] Multer Middleware (`upload`)`: (`server.js`, `routes/uploadRoutes.js`) - Defined in server, used in route.
+            *   `[X] Google Vision Client (`visionClient`)`: (`services/googleVisionService.js` -> imported) - Service exists.
+        *   **Middleware Setup:**
+            *   `[X] cors()`: (`server.js`) - Stays in main server file.
+            *   `[X] express.json()`: (`server.js`) - Stays in main server file.
+            *   `[X] express.urlencoded()`: (`server.js`) - Stays in main server file.
+        *   **Helper Functions:**
+            *   `[X] callAnthropic()`: (`services/anthropicService.js` -> imported) - Service exists.
+            *   `[X] updateJobStatus()`: (`services/kvService.js` -> imported, Redis direct updates) - KV helper exists, Redis logic in controllers.
+            *   `[X] parseAndCorrectJson()`: (`utils/jsonUtils.js` -> imported) - Utils file exists.
+            *   `[X] simpleNormalize()`: (Logic moved to `controllers/listController.js`) - Logic exists within controller.
+            *   `[X] parseYieldString()`: (Copied to `controllers/urlJobController.js`) - Present within controller.
+            *   `[X] findRecipe()` (nested within `/api/process-url-job`): (`controllers/urlJobController.js`) - Present within controller.
+        *   **Route Handlers (Controller Logic):**
+            *   `[X] POST /api/upload` logic: (`controllers/uploadController.js`) - Controller exists.
+            *   `[X] POST /api/process-image` logic: (`controllers/processImageController.js`) - Controller exists.
+            *   `[X] GET /api/job-status` logic: (`controllers/jobStatusController.js`) - Controller exists.
+            *   `[X] POST /api/create-list` logic: (`controllers/listController.js`) - Controller exists.
+            *   `[X] POST /api/send-to-instacart` logic: (`controllers/instacartController.js`) - Controller exists.
+            *   `[X] POST /api/process-text` logic: (`controllers/processTextController.js`) - Controller exists.
+            *   `[X] POST /api/process-url` logic: (`controllers/urlController.js`) - Controller exists.
+            *   `[X] POST /api/process-url-job` logic: (`controllers/urlJobController.js`) - Controller exists.
+            *   `[X] GET /` logic: (`server.js`) - Stays in main server file.
+        *   **Routing Setup (`app.post`, `app.get`):**
+            *   `[X] POST /api/upload`: (`routes/uploadRoutes.js`) - Route file exists.
+            *   `[X] POST /api/process-image`: (`routes/processImageRoutes.js`) - Route file exists.
+            *   `[X] GET /api/job-status`: (`routes/jobStatusRoutes.js`) - Route file exists.
+            *   `[X] POST /api/create-list`: (`routes/listRoutes.js`) - Route file exists.
+            *   `[X] POST /api/send-to-instacart`: (`routes/instacartRoutes.js`) - Route file exists.
+            *   `[X] POST /api/process-text`: (`routes/processTextRoutes.js`) - Route file exists.
+            *   `[X] POST /api/process-url`: (`routes/urlRoutes.js`) - Route file exists.
+            *   `[X] POST /api/process-url-job`: (`routes/urlJobRoutes.js`) - Route file exists.
+            *   `[X] GET /`: (`server.js`) - Stays in main server file.
+        *   **Server Start (`app.listen`):**
+            *   `[X]` (`server.js`) - Stays in main server file.
 
 ## P2: Future Enhancements
 
@@ -156,6 +216,8 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
 9.  **Polish UI/UX (P1):** Simplify pantry text, refine layout. Deploy & Test.
 10. **Implement Individual Timeout Handling (P0/P1 - Required UX):** Modify frontend to allow dismissing/retrying single timed-out recipe cards.
 11. **Final Demo Run-through.**
+12. **Refactor Backend Codebase (P1):** Execute the modularization plan (routes, controllers, services, utils).
+13. **Final Demo Run-through (Post-Refactor).**
 
 ---
 
