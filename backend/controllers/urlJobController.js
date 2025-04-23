@@ -12,12 +12,51 @@ const fetch = (...args) =>
   
   /* Internal shared services / utils */
   const { redis } = require('../services/redisService');
-  const { kvClient, updateJobStatus } = require('../services/kvService');
   const { callAnthropic } = require('../services/anthropicService');
   const { parseAndCorrectJson } = require('../utils/jsonUtils');
   
   /* -------------------------------------------------------------------------- */
-  /* Utility copied from legacy server.js                                       */
+  /* Utility function to update job status in Redis                             */
+  /* -------------------------------------------------------------------------- */
+  async function updateUrlJobStatusInRedis(jobId, status, data = {}) {
+    if (!redis) {
+        console.error(`[${jobId}] Redis client not available in updateUrlJobStatusInRedis. Cannot update status to ${status}.`);
+        return; // Or throw an error if critical
+    }
+    try {
+        let currentData = await redis.get(jobId); // Get current data (will be null or an object)
+        if (!currentData) {
+            console.warn(`[${jobId}] Job data not found in Redis when trying to update status to ${status}. Initializing.`);
+            // If job data doesn't exist, initialize it minimally for the update
+            currentData = { jobId: jobId, startTime: Date.now(), status: 'unknown' }; // Add startTime if possible
+        } 
+        // No need to parse if using redis.get which returns the object directly
+
+        const newData = { ...currentData, status, ...data }; // Merge new status and data
+
+        // Set end time only on terminal statuses
+        if (status === 'completed' || status === 'failed') {
+            newData.endTime = Date.now();
+            if (newData.startTime) {
+                console.log(`[${jobId}] Job finished with status ${status} in ${newData.endTime - newData.startTime}ms`);
+            } else {
+                console.log(`[${jobId}] Job finished with status ${status}.`);
+            }
+        } else {
+            console.log(`[${jobId}] Status updated to ${status}.`);
+        }
+
+        // Store the updated data back into Redis, stringified
+        await redis.set(jobId, JSON.stringify(newData), { ex: 86400 }); // Keep expiration
+
+    } catch (error) {
+        console.error(`[${jobId}] Failed to update job status to ${status} in Redis:`, error);
+        // Handle Redis error appropriately
+    }
+  }
+  
+  /* -------------------------------------------------------------------------- */
+  /* Utility copied from legacy server.js (Parse Yield)                         */
   /* -------------------------------------------------------------------------- */
   function parseYieldString(yieldStr) {
     if (!yieldStr || typeof yieldStr !== 'string') return null;
@@ -65,16 +104,20 @@ const fetch = (...args) =>
   
     try {
       /* ------------------------------------------------------------------ */
-      /* 1) Load job record from KV                                         */
+      /* 1) Load job record from Redis                                      */
       /* ------------------------------------------------------------------ */
-      jobData = await kvClient.get(jobId);
+      if (!redis) { throw new Error('Redis client not available in processUrlJob'); }
+      jobData = await redis.get(jobId); // Use redis.get
+      // redis.get returns the object directly, no need to parse initially
+  
       if (!jobData || ['completed', 'failed'].includes(jobData.status)) {
-        console.warn(`[${jobId}] Job not found or already processed (${jobData?.status}).`);
+        console.warn(`[${jobId}] Job not found in Redis or already processed (${jobData?.status}).`);
         return res.status(200).json({ message: 'Job already processed or not found.' });
       }
   
       const { inputUrl } = jobData;
-      await updateJobStatus(jobId, 'processing_started');
+      // Use the new Redis update helper
+      await updateUrlJobStatusInRedis(jobId, 'processing_started'); 
       console.log(`[${jobId}] Processing URL: ${inputUrl}`);
   
       /* ------------------------------------------------------------------ */
@@ -84,7 +127,8 @@ const fetch = (...args) =>
       let finalUrl = inputUrl;
   
       try {
-        await updateJobStatus(jobId, 'fetching_html');
+        // Use the new Redis update helper
+        await updateUrlJobStatusInRedis(jobId, 'fetching_html'); 
         console.log(`[${jobId}] Fetching HTML…`);
   
         const response = await fetch(inputUrl, {
@@ -129,7 +173,8 @@ const fetch = (...args) =>
         }
       } catch (fetchErr) {
         console.error(`[${jobId}] Fetching HTML failed:`, fetchErr);
-        await updateJobStatus(jobId, 'failed', {
+        // Use the new Redis update helper
+        await updateUrlJobStatusInRedis(jobId, 'failed', { 
           error: `Failed to fetch URL: ${fetchErr.message}`
         });
         return res.status(200).json({ message: 'Fetch failed, job status updated.' });
@@ -140,7 +185,8 @@ const fetch = (...args) =>
       /* ------------------------------------------------------------------ */
       let recipeResult = null;
       try {
-        await updateJobStatus(jobId, 'parsing_jsonld');
+        // Use the new Redis update helper
+        await updateUrlJobStatusInRedis(jobId, 'parsing_jsonld'); 
         const $ = cheerio.load(htmlContent);
         let recipeJson = null;
   
@@ -167,7 +213,7 @@ const fetch = (...args) =>
             const parsed = JSON.parse($(el).html() || '{}');
             const found = findRecipe(parsed);
             if (found) recipeJson = found;
-          } catch {}
+          } catch { /* Ignore parsing errors */ }
         });
   
         if (
@@ -178,15 +224,15 @@ const fetch = (...args) =>
         ) {
           const title = recipeJson.name || 'Recipe from URL';
   
-          // ---------------- parse yield ----------------
+          // Parse yield
           let parsedYield = null;
           if (recipeJson.recipeYield) {
             const rawYield = recipeJson.recipeYield;
             if (typeof rawYield === 'string') parsedYield = parseYieldString(rawYield);
             else if (Array.isArray(rawYield) && rawYield.length) {
               const best =
-                rawYield.find((el) => /\d/.test(el) && /[a-zA-Z]/.test(el)) || rawYield[0];
-              parsedYield = parseYieldString(best);
+                rawYield.find((el) => typeof el === 'string' && /\d/.test(el) && /[a-zA-Z]/.test(el)) || rawYield[0];
+              if (best) parsedYield = parseYieldString(String(best)); // Ensure string
             } else if (typeof rawYield === 'object' && rawYield !== null) {
               const q =
                 rawYield.value ??
@@ -198,17 +244,22 @@ const fetch = (...args) =>
                 rawYield.unitCode ??
                 rawYield.valueReference?.unitText ??
                 null;
-              if (q != null) parsedYield = { quantity: Number(q), unit: u || null };
+              if (q != null) {
+                const qtyNum = parseFloat(String(q).replace(',', '.')) || null;
+                if (qtyNum) parsedYield = { quantity: qtyNum, unit: u || null };
+              } else if (rawYield.description) { // Fallback to description in object
+                parsedYield = parseYieldString(String(rawYield.description));
+              }
             }
           }
-          // ------------------------------------------------
   
           // ingredient strings → ask LLM to parse
           const ingredientStrings = recipeJson.recipeIngredient
             .map((line) => String(line).trim())
             .filter(Boolean);
           if (ingredientStrings.length) {
-            await updateJobStatus(jobId, 'llm_parsing_ingredients');
+            // Use the new Redis update helper
+            await updateUrlJobStatusInRedis(jobId, 'llm_parsing_ingredients'); 
   
             const sysPrompt =
               'You are an expert ingredient parser assisting with grocery lists. ' +
@@ -222,12 +273,13 @@ const fetch = (...args) =>
             const parsed = await parseAndCorrectJson(jobId, llmResp, 'array');
   
             if (parsed && parsed.length) {
+              // Ensure correct keys (quantity, unit, ingredient)
               const clean = parsed
-                .filter((o) => o && typeof o === 'object' && 'name' in o)
+                .filter((o) => o && typeof o === 'object' && (o.name || o.ingredient))
                 .map((o) => ({
                   quantity: o.quantity ?? null,
                   unit: o.unit ?? null,
-                  name: o.name
+                  ingredient: o.ingredient || o.name // Prefer 'ingredient', fallback to 'name'
                 }));
   
               if (clean.length) {
@@ -235,7 +287,8 @@ const fetch = (...args) =>
                   title,
                   yield: parsedYield,
                   ingredients: clean,
-                  sourceUrl: finalUrl
+                  sourceUrl: finalUrl,
+                  extractedFrom: 'json-ld' // Add source info
                 };
                 console.log(
                   `[${jobId}] Parsed ${clean.length} ingredients via JSON-LD + LLM`
@@ -253,7 +306,8 @@ const fetch = (...args) =>
       /* ------------------------------------------------------------------ */
       if (!recipeResult) {
         try {
-          await updateJobStatus(jobId, 'parsing_readability');
+          // Use the new Redis update helper
+          await updateUrlJobStatusInRedis(jobId, 'parsing_readability'); 
   
           const doc = new JSDOM(htmlContent, { url: finalUrl });
           const article = new Readability(doc.window.document).parse();
@@ -263,38 +317,41 @@ const fetch = (...args) =>
           const fallbackTitle = article.title || 'Recipe from URL';
           const mainText = article.textContent.substring(0, 18000); // leave room for prompt
   
+          // Updated prompt for consistency (ingredient key)
           const sysPrompt =
-            'You are an expert recipe parser. Extract title, yield object, and a JSON array ' +
-            "of ingredients [{quantity, unit, name}] from the user's text. Return ONLY JSON.";
-          const userPrompt = `---\n${mainText}\n---`;
+            'You are an expert recipe parser assisting with grocery list creation. ' +
+            'Extract the recipe title, yield object { quantity, unit }, and a JSON array ' +
+            'of ingredients [{quantity, unit, ingredient}] from the provided text. ' +
+            'Output ONLY a single valid JSON object with keys `title`, `yield`, and `ingredients`. Ensure perfect JSON syntax.';
+          const userPrompt = `Recipe Text:\n---\n${mainText}\n---`;
   
-          await updateJobStatus(jobId, 'llm_parsing_fallback');
+          // Use the new Redis update helper
+          await updateUrlJobStatusInRedis(jobId, 'llm_parsing_fallback'); 
           const raw = await callAnthropic(sysPrompt, userPrompt);
           const parsed = await parseAndCorrectJson(jobId, raw, 'object');
   
           if (parsed && Array.isArray(parsed.ingredients)) {
+            // Ensure correct keys (quantity, unit, ingredient)
             const clean = parsed.ingredients
-              .filter((o) => o && typeof o === 'object' && 'name' in o && o.name.trim())
+              .filter((o) => o && typeof o === 'object' && o.ingredient && String(o.ingredient).trim())
               .map((o) => ({
                 quantity: o.quantity ?? null,
                 unit: o.unit ?? null,
-                name: o.name
+                ingredient: o.ingredient
               }));
   
             if (clean.length) {
-              const y =
-                parsed.yield && typeof parsed.yield === 'object'
-                  ? {
-                      quantity: parsed.yield.quantity ?? null,
-                      unit: parsed.yield.unit ?? null
-                    }
-                  : null;
+              // Parse yield from fallback response
+              const y = parsed.yield && typeof parsed.yield === 'object'
+                ? { quantity: parsed.yield.quantity ?? null, unit: parsed.yield.unit ?? null }
+                : null;
   
               recipeResult = {
                 title: parsed.title || fallbackTitle,
                 yield: y,
                 ingredients: clean,
-                sourceUrl: finalUrl
+                sourceUrl: finalUrl,
+                extractedFrom: 'readability' // Add source info
               };
               console.log(
                 `[${jobId}] Parsed ${clean.length} ingredients via Readability fallback`
@@ -303,11 +360,12 @@ const fetch = (...args) =>
               throw new Error('LLM returned no valid ingredients.');
             }
           } else {
-            throw new Error('LLM response lacked expected structure.');
+            throw new Error('LLM response lacked expected structure (missing ingredients array?).');
           }
         } catch (fallbackErr) {
           console.error(`[${jobId}] Readability / fallback error:`, fallbackErr);
-          await updateJobStatus(jobId, 'failed', {
+          // Use the new Redis update helper
+          await updateUrlJobStatusInRedis(jobId, 'failed', { 
             error: `Fallback extraction failed: ${fallbackErr.message}`
           });
           return res.status(200).json({ message: 'Fallback failed, job updated.' });
@@ -315,13 +373,15 @@ const fetch = (...args) =>
       }
   
       /* ------------------------------------------------------------------ */
-      /* 5) Final KV update + response                                       */
+      /* 5) Final Redis update + response                                     */
       /* ------------------------------------------------------------------ */
       if (recipeResult) {
-        await updateJobStatus(jobId, 'completed', { result: recipeResult });
-        console.log(`[${jobId}] Processing complete, result stored.`);
+        // Use the new Redis update helper
+        await updateUrlJobStatusInRedis(jobId, 'completed', { result: recipeResult }); 
+        console.log(`[${jobId}] Processing complete, result stored in Redis.`);
       } else {
-        await updateJobStatus(jobId, 'failed', {
+        // Use the new Redis update helper
+        await updateUrlJobStatusInRedis(jobId, 'failed', { 
           error: 'Finished without extracting a valid recipe.'
         });
         console.error(`[${jobId}] Finished unexpectedly without result.`);
@@ -333,8 +393,9 @@ const fetch = (...args) =>
     } catch (err) {
       /* Unhandled fatal error */
       console.error(`[${jobId}] CRITICAL worker error:`, err);
-      await updateJobStatus(jobId, 'failed', {
-        error: `Unexpected worker error: ${err.message}`
+      // Use the new Redis update helper (attempt to update status)
+      await updateUrlJobStatusInRedis(jobId, 'failed', { 
+        error: `Unexpected worker error: ${err.message}` 
       });
       return res.status(500).json({ error: 'Worker crashed.' });
     }

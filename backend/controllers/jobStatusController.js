@@ -1,4 +1,6 @@
-const { kvClient } = require('../services/kvService'); // Import kvClient
+// backend/controllers/jobStatusController.js
+// const { kvClient } = require('../services/kvService'); // Switch to Redis
+const { redis } = require('../services/redisService'); // Use Redis service
 
 async function getJobStatus(req, res) {
     const { jobId } = req.query;
@@ -7,24 +9,34 @@ async function getJobStatus(req, res) {
     }
 
     try {
-        // Use the imported kvClient
-        const jobData = await kvClient.get(jobId);
+        // Use Redis client
+        if (!redis) { 
+            throw new Error('Redis client not available in jobStatusController'); 
+        }
 
-        if (!jobData) {
-            console.warn(`[Job Status] Job data not found in KV for Job ID: ${jobId}`);
-            // Return 404 for not found
+        const jobDataString = await redis.get(jobId); // Redis get returns string or null
+
+        if (!jobDataString) {
+            console.warn(`[Job Status] Job data not found in Redis for Job ID: ${jobId}`);
             return res.status(404).json({ status: 'not_found', error: 'Job not found or expired.' });
         }
 
-        // Assuming kvClient returns the object directly (no parsing needed for KV)
+        // Parse the JSON string retrieved from Redis
+        const jobData = JSON.parse(jobDataString);
+
         res.json({
             status: jobData.status,
-            result: jobData.result, // Send result directly
-            error: jobData.error   // Send error directly
+            result: jobData.result, 
+            error: jobData.error
         });
 
     } catch (error) {
-        console.error(`[Job Status] Error fetching status for Job ID ${jobId} from KV:`, error);
+        console.error(`[Job Status] Error fetching status for Job ID ${jobId} from Redis:`, error);
+        if (error instanceof SyntaxError) {
+            console.error(`[Job Status] Failed to parse job data from Redis for Job ID: ${jobId}. Data: ${jobDataString}`);
+            // Optionally return a specific error or the raw string for debugging
+            return res.status(500).json({ error: 'Failed to parse job status data.' });
+        }
         res.status(500).json({ error: 'Failed to retrieve job status.', details: error.message });
     }
 }
