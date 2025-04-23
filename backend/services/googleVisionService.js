@@ -3,25 +3,37 @@
 
 const { ImageAnnotatorClient } = require('@google-cloud/vision');
 
-// Google Cloud Vision client initialization
-let visionClient;
+let visionClient = null; // Initialize as null
 
 try {
-  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (!credentialsPath) {
-    throw new Error('GOOGLE_APPLICATION_CREDENTIALS environment variable is not set.');
+  // Read the credentials JSON content directly from GOOGLE_APPLICATION_CREDENTIALS
+  const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!credentialsJson) {
+    // Log a warning if running locally without the variable, but throw on Vercel
+    if (process.env.VERCEL === '1') {
+         throw new Error('GOOGLE_APPLICATION_CREDENTIALS environment variable (containing JSON content) is not set on Vercel.');
+    } else {
+         console.warn('GOOGLE_APPLICATION_CREDENTIALS environment variable (containing JSON content) not set for local development. Google Vision will likely fail.');
+         // Allow execution to continue locally, but visionClient remains null
+    }
+  } else {
+      // Parse the JSON string from the environment variable
+      const credentials = JSON.parse(credentialsJson);
+
+      // Explicitly pass the credentials object during client initialization
+      visionClient = new ImageAnnotatorClient({ credentials });
+      console.log('Google Vision API client initialized successfully from GOOGLE_APPLICATION_CREDENTIALS JSON content.');
   }
-  
-  visionClient = new ImageAnnotatorClient();
-  console.log('Google Vision API client initialized successfully');
+
 } catch (error) {
   console.error('Failed to initialize Google Cloud Vision client:', error);
-  if (error.message.includes('Could not load the default credentials') || error.message.includes('Could not find file')) {
-      console.error(`Check if the path specified in GOOGLE_APPLICATION_CREDENTIALS is correct: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
+  // Log details if parsing fails or client creation fails
+  if (error instanceof SyntaxError) {
+      console.error('Error parsing GOOGLE_APPLICATION_CREDENTIALS JSON content. Ensure it is valid JSON and not a file path.');
   }
-  visionClient = null; // Ensure it's null if init failed
+  // visionClient remains null if initialization failed
 }
 
 module.exports = {
-  visionClient
+  visionClient // Will be null if initialization failed
 }; 

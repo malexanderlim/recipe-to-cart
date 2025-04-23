@@ -12,6 +12,7 @@ const { callAnthropic } = require('../services/anthropicService');
  * Called as background worker by /api/process-image
  */
 async function processText(req, res) {
+    console.log(`---> /api/process-text FUNCTION ENTRY <---`);
     console.log(`[Process Text Handler] ===== FUNCTION HANDLER ENTERED =====`);
     const { jobId } = req.body;
     if (!jobId) {

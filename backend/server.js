@@ -30,7 +30,7 @@ const instacartRoutes = require('./routes/instacartRoutes');
 
 // --- API Routes --- 
 // Apply the upload middleware specifically to the upload route
-app.use('/api/upload', upload.array('recipeImages'), uploadRoutes);
+app.use('/api/upload', uploadRoutes);
 app.use('/api/process-image', processImageRoutes);
 app.use('/api/process-text', processTextRoutes);
 app.use('/api/process-url', urlRoutes);

@@ -86,7 +86,7 @@ async function createList(req, res) {
         try {
             // Single call to the LLM: Get normalized names & conversion data
             console.log("V7: Sending request to LLM for normalization and conversion data...");
-            rawLlmResponse = await callAnthropic(systemPrompt, userPrompt, 'claude-3-haiku-20240307', 15000);
+            rawLlmResponse = await callAnthropic(systemPrompt, userPrompt, 'claude-3-haiku-20240307');
             console.log(`V7: Received LLM response. Length: ${rawLlmResponse?.length || 0}`);
 
             // V7: More robust parsing - several fallback options
