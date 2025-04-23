@@ -264,14 +264,14 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
 
 **Guiding Principles:** Prioritize robustness, user experience, and technical feasibility within the Vercel serverless environment. Avoid heavy server-side browser automation (Puppeteer/Selenium) in the initial phase due to complexity and potential resource limitations.
 
-### Phase 1: MVP - Core URL Extraction
+### Phase 1: MVP - Core URL Extraction [X]
 
 *   **Focus:** Handle common, well-structured recipe websites (especially those using JSON-LD schema) and provide clear errors for unsupported cases (login required, major fetch/parse failures).
 *   **Core Idea:** Fetch HTML, attempt structured data extraction (JSON-LD), fall back to cleaning HTML (Readability) and LLM parsing, reusing the existing async job infrastructure.
 
 **Technical Approach:**
 
-1.  **Frontend (`index.html`, `script.js`):**
+1.  **[X] Frontend (`index.html`, `script.js`):
     *   Add URL input field and "Add Recipe from URL" button.
     *   On button click:
         *   Perform basic client-side URL validation.
@@ -280,34 +280,36 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
         *   Receive `jobId` from backend.
         *   Reuse existing `pollJobStatus(jobId)` and `renderSingleRecipeResult(result)` functions.
 
-2.  **Backend (`server.js`):**
-    *   **New Endpoint (`/api/process-url` - Trigger):**
+2.  **[X] Backend (`server.js`):
+    *   **[X] New Endpoint (`/api/process-url` - Trigger):
         *   Input: `{ url }`.
         *   Validate URL.
         *   Generate `jobId`.
         *   Store initial job state in Vercel KV: `{ status: 'pending', inputUrl: url }`.
         *   Asynchronously trigger `/api/process-url-job` via `fetch` with `{ jobId }`.
         *   Return `202 Accepted` with `{ jobId }`.
-    *   **New Background Function (`/api/process-url-job` - Worker):**
+    *   **[X] New Background Function (`/api/process-url-job` - Worker):
         *   Input: `{ jobId }`.
         *   Retrieve `inputUrl` from KV.
-        *   **Step 1: Fetch HTML:** Use `node-fetch` (or similar). Handle errors (non-200, network, wrong content-type). Basic login wall detection (redirect URL, title/content keywords). Update KV with failure if issues arise.
-        *   **Step 2: Structured Data Extraction (JSON-LD):**
+        *   **[X] Step 1: Fetch HTML:** Use `node-fetch` (or similar). Handle errors (non-200, network, wrong content-type). Basic login wall detection (redirect URL, title/content keywords). Update KV with failure if issues arise.
+        *   **[X] Step 2: Structured Data Extraction (JSON-LD):
             *   Use `cheerio` to parse HTML.
             *   Search for `<script type="application/ld+json">` containing `@type: Recipe`.
             *   If found, extract `name`, `recipeYield`, `recipeIngredient`.
+            *   Parse `recipeYield` into `{ quantity, unit }` object.
             *   Pass `recipeIngredient` strings to a *specialized LLM prompt* for parsing into `{ quantity, unit, name }`.
-            *   On success, update KV: `{ status: 'completed', result: { title, yield, ingredients, sourceUrl: inputUrl } }`.
-        *   **Step 3: Fallback (Readability + LLM):** If JSON-LD fails/absent:
+            *   On success, update KV: `{ status: 'completed', result: { title, yield: { quantity, unit }, ingredients, sourceUrl: inputUrl } }`.
+        *   **[X] Step 3: Fallback (Readability + LLM):** If JSON-LD fails/absent:
             *   Use `@mozilla/readability` (with `jsdom`) to extract main article `title` and `content` HTML.
             *   Get `textContent` from the cleaned content.
-            *   Use a *different, specialized LLM prompt* optimized for extracting recipe details from unstructured article text.
+            *   Use a *different, specialized LLM prompt* optimized for extracting recipe details (title, yield object, ingredients) from unstructured article text.
             *   Parse LLM response.
-            *   On success, update KV: `{ status: 'completed', result: { title, yield, ingredients, sourceUrl: inputUrl } }`.
+            *   On success, update KV: `{ status: 'completed', result: { title, yield: { quantity, unit }, ingredients, sourceUrl: inputUrl } }`.
             *   On failure (Readability or LLM), update KV: `{ status: 'failed', error: 'Could not extract recipe details.' }`.
-    *   **New Dependencies:** `jsdom`, `@mozilla/readability`, `cheerio`.
+    *   **[X] KV Client Correction:** Ensure `/api/job-status` uses `kvClient` locally.
+    *   **[X] New Dependencies:** `jsdom`, `@mozilla/readability`, `cheerio`.
 
-### Phase 2: Handling Client-Side Rendering & Improving Robustness
+### Phase 2: Handling Client-Side Rendering & Improving Robustness [ ] 
 
 *   **Consider if Phase 1 proves insufficient for key target sites.**
 *   **Options (Investigate if needed):**
@@ -316,80 +318,9 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
 
 **Implementation Steps (Phase 1):**
 
-1.  Add new dependencies (`jsdom`, `@mozilla/readability`, `cheerio`) to `backend/package.json`.
-2.  Implement In-Memory KV Mock for Local Development in `backend/server.js`.
-3.  Implement backend endpoints (`/api/process-url`, `/api/process-url-job`) and worker logic, using the (potentially mocked) KV store.
-4.  Implement frontend changes (UI elements, JS logic for triggering and polling).
-5.  Develop and test specialized LLM prompts for JSON-LD ingredients and fallback text extraction.
-6.  Thorough testing with diverse URLs (including provided example, JSON-LD sites, non-recipe sites, sites needing login) **both locally and on Vercel**.
-
-**Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit.
-
----
-
-## New Feature: URL Recipe Extraction
-
-**Goal:** Allow users to add recipes by pasting URLs from websites, complementing the existing image upload functionality. The extracted recipes should follow the same flow (display, yield adjustment, Instacart list creation).
-
-**Challenges:** Inconsistent website structures, ads, verbose content, client-side rendering, potential login walls.
-
-**Guiding Principles:** Prioritize robustness, user experience, and technical feasibility within the Vercel serverless environment. Avoid heavy server-side browser automation (Puppeteer/Selenium) in the initial phase due to complexity and potential resource limitations.
-
-### Phase 1: MVP - Core URL Extraction
-
-*   **Focus:** Handle common, well-structured recipe websites (especially those using JSON-LD schema) and provide clear errors for unsupported cases (login required, major fetch/parse failures).
-*   **Core Idea:** Fetch HTML, attempt structured data extraction (JSON-LD), fall back to cleaning HTML (Readability) and LLM parsing, reusing the existing async job infrastructure.
-
-**Technical Approach:**
-
-1.  **Frontend (`index.html`, `script.js`):**
-    *   Add URL input field and "Add Recipe from URL" button.
-    *   On button click:
-        *   Perform basic client-side URL validation.
-        *   Display a new recipe card in "Processing URL..." state.
-        *   Call new backend endpoint `POST /api/process-url` with `{ url: recipeUrl }`.
-        *   Receive `jobId` from backend.
-        *   Reuse existing `pollJobStatus(jobId)` and `renderSingleRecipeResult(result)` functions.
-
-2.  **Backend (`server.js`):**
-    *   **New Endpoint (`/api/process-url` - Trigger):**
-        *   Input: `{ url }`.
-        *   Validate URL.
-        *   Generate `jobId`.
-        *   Store initial job state in Vercel KV: `{ status: 'pending', inputUrl: url }`.
-        *   Asynchronously trigger `/api/process-url-job` via `fetch` with `{ jobId }`.
-        *   Return `202 Accepted` with `{ jobId }`.
-    *   **New Background Function (`/api/process-url-job` - Worker):**
-        *   Input: `{ jobId }`.
-        *   Retrieve `inputUrl` from KV.
-        *   **Step 1: Fetch HTML:** Use `node-fetch` (or similar). Handle errors (non-200, network, wrong content-type). Basic login wall detection (redirect URL, title/content keywords). Update KV with failure if issues arise.
-        *   **Step 2: Structured Data Extraction (JSON-LD):**
-            *   Use `cheerio` to parse HTML.
-            *   Search for `<script type="application/ld+json">` containing `@type: Recipe`.
-            *   If found, extract `name`, `recipeYield`, `recipeIngredient`.
-            *   Pass `recipeIngredient` strings to a *specialized LLM prompt* for parsing into `{ quantity, unit, name }`.
-            *   On success, update KV: `{ status: 'completed', result: { title, yield, ingredients, sourceUrl: inputUrl } }`.
-        *   **Step 3: Fallback (Readability + LLM):** If JSON-LD fails/absent:
-            *   Use `@mozilla/readability` (with `jsdom`) to extract main article `title` and `content` HTML.
-            *   Get `textContent` from the cleaned content.
-            *   Use a *different, specialized LLM prompt* optimized for extracting recipe details from unstructured article text.
-            *   Parse LLM response.
-            *   On success, update KV: `{ status: 'completed', result: { title, yield, ingredients, sourceUrl: inputUrl } }`.
-            *   On failure (Readability or LLM), update KV: `{ status: 'failed', error: 'Could not extract recipe details.' }`.
-    *   **New Dependencies:** `jsdom`, `@mozilla/readability`, `cheerio`.
-
-### Phase 2: Handling Client-Side Rendering & Improving Robustness
-
-*   **Consider if Phase 1 proves insufficient for key target sites.**
-*   **Options (Investigate if needed):**
-    1.  **Serverless Headless Browser:** Puppeteer/Playwright (via Vercel functions or external service like Browserless.io) to render JS *before* applying Phase 1 extraction logic. Adds complexity/cost.
-    2.  **Third-Party Scraping APIs:** Dedicated services for rendering and extraction. Adds external dependency/cost.
-
-**Implementation Steps (Phase 1):**
-
-1.  Add new dependencies (`jsdom`, `@mozilla/readability`, `cheerio`) to `backend/package.json`.
-2.  Implement In-Memory KV Mock for Local Development in `backend/server.js`.
-3.  Implement backend endpoints (`/api/process-url`, `/api/process-url-job`) and worker logic, using the (potentially mocked) KV store.
-4.  Implement frontend changes (UI elements, JS logic for triggering and polling).
-5.  Develop and test specialized LLM prompts for JSON-LD ingredients and fallback text extraction.
-6.  Thorough testing with diverse URLs (including provided example, JSON-LD sites, non-recipe sites, sites needing login) **both locally and on Vercel**. 
+1.  [X] Add new dependencies (`jsdom`, `@mozilla/readability`, `cheerio`) to `backend/package.json`.
+2.  [X] Implement In-Memory KV Mock for Local Development in `backend/server.js`.
+3.  [X] Implement backend endpoints (`/api/process-url`, `/api/process-url-job`) and worker logic, using the (potentially mocked) KV store.
+4.  [X] Implement frontend changes (UI elements, JS logic for triggering and polling).
+5.  [X] Develop and test specialized LLM prompts for JSON-LD ingredients and fallback text extraction (including yield object).
+6.  [X] Thorough testing with diverse URLs (including provided example, JSON-LD sites, non-recipe sites, sites needing login) **both locally and on Vercel**. 

@@ -595,22 +595,32 @@ app.get('/api/job-status', async (req, res) => {
     }
 
     try {
-        if (!redis) { throw new Error('Redis client not initialized'); }
-        const jobData = await redis.get(jobId); // Assign directly, no parsing needed
+        // if (!redis) { throw new Error('Redis client not initialized'); } // <-- Incorrect: Was using Redis for all jobs
+        // const jobData = await redis.get(jobId); // <-- Incorrect: Was using Redis for all jobs
+
+        // --- Corrected Logic: Use kvClient (mock or real KV) --- 
+        const jobData = await kvClient.get(jobId);
+        // --------------------------------------------------------
+
         if (!jobData) { // Check the object directly
             // If job isn't found, it might have expired or never existed
-            console.warn(`[Job Status] Job data not found in Redis for Job ID: ${jobId}`);
+            // Updated log message to reflect kvClient usage
+            console.warn(`[Job Status] Job data not found in KV for Job ID: ${jobId}`);
             return res.status(404).json({ status: 'not_found', error: 'Job not found or expired.' });
         }
 
+        // Check if result needs parsing (needed if KV stores strings, but mock/real KV store objects)
+        // Let's assume kvClient directly returns the object for now.
+        // If errors occur later, we might need: const parsedResult = typeof jobData.result === 'string' ? JSON.parse(jobData.result) : jobData.result;
+
         res.json({
             status: jobData.status,
-            result: jobData.result,
+            result: jobData.result, // Send result directly
             error: jobData.error
         });
 
     } catch (error) {
-        console.error(`[Job Status] Error fetching status for Job ID ${jobId} from Redis:`, error);
+        console.error(`[Job Status] Error fetching status for Job ID ${jobId} from KV:`, error); // Updated log
         res.status(500).json({ error: 'Failed to retrieve job status.', details: error.message });
     }
 });
@@ -1299,6 +1309,29 @@ app.post('/api/process-url', async (req, res) => {
     }
 });
 
+// Helper function to parse yield strings (e.g., "16 servings", "makes 1 loaf")
+function parseYieldString(yieldStr) {
+    if (!yieldStr || typeof yieldStr !== 'string') return null;
+    // Regex: Optional non-digits at start, capture first number (int/float), capture subsequent words/hyphens as unit
+    const match = yieldStr.match(/^[^\d]*?(\d+(?:[.,]\d+)?)\s*([\w\s-]+)/);
+    if (match && match[1]) {
+        const quantity = parseFloat(match[1].replace(',', '.')) || null;
+        // Clean up unit: trim whitespace, remove leading/trailing punctuation often used ("(makes...)")
+        const unit = match[2] ? match[2].trim().replace(/^[()[\]]+|[()[\]]+$/g, '').trim().toLowerCase() : null;
+        if (quantity) {
+            // Basic pluralization check for common units
+            const unitSingular = (unit?.endsWith('s') && !['servings'].includes(unit)) ? unit.slice(0, -1) : unit;
+            return { quantity, unit: (quantity === 1 ? unitSingular : unit) || null };
+        }
+    }
+    // Fallback: If no unit found after number, just return quantity
+    const quantityOnlyMatch = yieldStr.match(/^[^\d]*?(\d+(?:[.,]\d+)?)/);
+    if (quantityOnlyMatch && quantityOnlyMatch[1]) {
+        return { quantity: parseFloat(quantityOnlyMatch[1].replace(',', '.')) || null, unit: null };
+    }
+    return null; // Could not parse
+}
+
 // POST /api/process-url-job (Background Worker)
 app.post('/api/process-url-job', async (req, res) => {
     const { jobId } = req.body;
@@ -1415,17 +1448,58 @@ app.post('/api/process-url-job', async (req, res) => {
              if (recipeJson && recipeJson.recipeIngredient && Array.isArray(recipeJson.recipeIngredient) && recipeJson.recipeIngredient.length > 0) {
                  console.log(`[${jobId}] Extracting title, yield, and ingredients from JSON-LD.`);
                  const title = recipeJson.name || 'Recipe from URL';
-                  // Handle yield potentially being an object or array
-                 let yieldValue = 'unknown';
+
+                 // --- Updated Yield Parsing Logic ---
+                 let parsedYield = null; // Default to null object
                  if (recipeJson.recipeYield) {
-                     if (Array.isArray(recipeJson.recipeYield)) {
-                         yieldValue = String(recipeJson.recipeYield[0]); // Take first element if array
-                     } else if (typeof recipeJson.recipeYield === 'object') {
-                         yieldValue = String(recipeJson.recipeYield.value || recipeJson.recipeYield.name || 'unknown'); // Handle object yield
-                     } else {
-                        yieldValue = String(recipeJson.recipeYield);
+                     const rawYield = recipeJson.recipeYield;
+                     console.log(`[${jobId}] Raw JSON-LD yield:`, rawYield);
+
+                     if (typeof rawYield === 'object' && rawYield !== null && !Array.isArray(rawYield)) {
+                        // Try common object patterns (schema.org examples)
+                         const quant = rawYield.value ?? rawYield.yieldValue ?? rawYield.valueReference?.value ?? null;
+                         const unit = rawYield.unitText ?? rawYield.unitCode ?? rawYield.valueReference?.unitText ?? null;
+                         if (quant !== null) {
+                             const quantityNum = parseFloat(String(quant).replace(',', '.')) || null;
+                             if (quantityNum) { // Check if parsing was successful
+                                 parsedYield = { quantity: quantityNum, unit: unit || null };
+                             }
+                         }
+                         // If parsing object failed, maybe it has a string representation?
+                         if (!parsedYield && typeof rawYield.description === 'string') { 
+                             parsedYield = parseYieldString(rawYield.description);
+                         }
+                     } else if (typeof rawYield === 'string') {
+                        parsedYield = parseYieldString(rawYield);
+                     } else if (Array.isArray(rawYield) && rawYield.length > 0) {
+                        // --- Refined Array Handling: Prioritize element with digits and letters ---
+                        let elementToParse = rawYield[0]; // Default to first
+                        const bestElement = rawYield.find(el => typeof el === 'string' && /\d/.test(el) && /[a-zA-Z]/.test(el));
+                        if (bestElement) {
+                            elementToParse = bestElement; // Use the element with both numbers and text
+                            console.log(`[${jobId}] Prioritizing yield element with text: "${elementToParse}"`);
+                        }
+                        // ----------------------------------------------------------------------
+
+                        // Now parse the selected element
+                        if (typeof elementToParse === 'string') {
+                            parsedYield = parseYieldString(elementToParse);
+                        } else if (typeof elementToParse === 'object' && elementToParse !== null) {
+                            // (Keep object parsing logic if needed for non-string array elements)
+                            const quant = elementToParse.value ?? elementToParse.yieldValue ?? null;
+                            const unit = elementToParse.unitText ?? elementToParse.unitCode ?? null;
+                            if (quant !== null) {
+                                 const quantityNum = parseFloat(String(quant).replace(',', '.')) || null;
+                                 if (quantityNum) {
+                                     parsedYield = { quantity: quantityNum, unit: unit || null };
+                                 }
+                            }
+                        }
                      }
                  }
+                 console.log(`[${jobId}] Parsed JSON-LD yield object:`, parsedYield);
+                 // --- End Updated Yield Parsing Logic ---
+
                  const ingredientStrings = recipeJson.recipeIngredient.filter(s => typeof s === 'string' && s.trim() !== ''); // Ensure strings
 
                  if (ingredientStrings.length > 0) {
@@ -1443,7 +1517,8 @@ app.post('/api/process-url-job', async (req, res) => {
                         const validIngredients = llmIngredientsResult.filter(item => typeof item === 'object' && item !== null && 'name' in item)
                             .map(item => ({ quantity: item.quantity ?? null, unit: item.unit ?? null, name: item.name })); // Ensure nulls
                         if (validIngredients.length > 0) {
-                            recipeResult = { title, yield: yieldValue, ingredients: validIngredients, sourceUrl: finalUrl };
+                            // Use the parsedYield from above
+                            recipeResult = { title, yield: parsedYield, ingredients: validIngredients, sourceUrl: finalUrl };
                             console.log(`[${jobId}] Successfully parsed ${validIngredients.length} ingredients via LLM from JSON-LD (after potential correction).`);
                         } else { console.warn(`[${jobId}] LLM JSON-LD result was valid array, but content lacked required structure.`); }
                     } else { console.warn(`[${jobId}] Could not get valid ingredient array from LLM for JSON-LD, even after correction attempt.`); }
@@ -1471,8 +1546,10 @@ app.post('/api/process-url-job', async (req, res) => {
                  const fallbackTitle = article.title || 'Recipe from URL'; // Use title from Readability
 
                  // ** Use updated prompt **
-                 const fallbackPrompt = `Please analyze the following text content from a recipe webpage to extract information for a grocery list. Identify: \\n1. The recipe title.\\n2. The recipe yield (e.g., "4 servings", "makes 1 dozen", null if unclear).\\n3. A list of ingredients. For each ingredient, determine the quantity (number or null), unit (string or null, use common units like cup, tsp, tbsp, oz, lb, g, kg, each, etc.), and the ingredient name (string). \\nIgnore cooking instructions, comments, ads, and other non-essential text. \\nRecipe Text:\\n---\\n${mainTextContent}\\n---\\n\\nCRITICAL INSTRUCTION: Respond ONLY with a single **valid** JSON object containing the keys "title", "yield", and "ingredients". Ensure the JSON syntax is perfect. Do NOT include ANY other text, explanations, or markdown formatting.`;
-                 const fallbackSystemPrompt = "You are an expert recipe parser assisting with grocery list creation for Instacart. Extract the recipe title, yield, and ingredients from the provided text. Output ONLY a **valid** JSON object with keys `title` (string), `yield` (string or null), and `ingredients` (array of objects `[{quantity, unit, name}]`). Use null for missing quantity or unit.";
+                 // Updated prompt to request yield as an object
+                 const fallbackPrompt = `Please analyze the following text content from a recipe webpage to extract information for a grocery list. Identify: \\n1. The recipe title (string).\\n2. The recipe yield as a JSON object { "quantity": number|null, "unit": string|null } (e.g., { "quantity": 4, "unit": "servings" }, { "quantity": 1, "unit": "dozen" }, or null if unclear).\\n3. A list of ingredients. For each ingredient, determine the quantity (number or null), unit (string or null, use common units like cup, tsp, tbsp, oz, lb, g, kg, each, etc.), and the ingredient name (string). \\nIgnore cooking instructions, comments, ads, and other non-essential text. \\nRecipe Text:\\n---\\n${mainTextContent}\\n---\\n\\nCRITICAL INSTRUCTION: Respond ONLY with a single **valid** JSON object containing the keys "title", "yield" (object or null), and "ingredients" (array). Ensure the JSON syntax is perfect. Do NOT include ANY other text, explanations, or markdown formatting.`;
+                 // Updated system prompt for yield object
+                 const fallbackSystemPrompt = "You are an expert recipe parser assisting with grocery list creation for Instacart. Extract the recipe title, yield, and ingredients from the provided text. Output ONLY a **valid** JSON object with keys `title` (string), `yield` (object `{ quantity, unit }` or null), and `ingredients` (array of objects `[{quantity, unit, name}]`). Use null for missing quantity or unit values.";
 
                  await updateJobStatus(jobId, 'llm_parsing_fallback');
                  const llmFallbackResponse = await callAnthropic(fallbackSystemPrompt, fallbackPrompt);
@@ -1484,8 +1561,18 @@ app.post('/api/process-url-job', async (req, res) => {
                      const validIngredients = llmFallbackResult.ingredients.filter(item => typeof item === 'object' && item !== null && 'name' in item && item.name.trim() !== '')
                          .map(item => ({ quantity: item.quantity ?? null, unit: item.unit ?? null, name: item.name })); // Ensure nulls
                      if (validIngredients.length > 0) {
-                         recipeResult = { title: llmFallbackResult.title || fallbackTitle, yield: llmFallbackResult.yield || 'unknown', ingredients: validIngredients, sourceUrl: finalUrl };
-                         console.log(`[${jobId}] Successfully parsed ${validIngredients.length} ingredients via LLM fallback (after potential correction).`);
+                         // --- Correctly assign yield object --- 
+                         const parsedYield = (typeof llmFallbackResult.yield === 'object' && llmFallbackResult.yield !== null) 
+                                               ? { quantity: llmFallbackResult.yield.quantity ?? null, unit: llmFallbackResult.yield.unit ?? null }
+                                               : null; // Default to null if not a valid object
+                         recipeResult = { 
+                             title: llmFallbackResult.title || fallbackTitle, 
+                             yield: parsedYield, // Assign the parsed object or null
+                             ingredients: validIngredients, 
+                             sourceUrl: finalUrl 
+                         };
+                         // -------------------------------------
+                         console.log(`[${jobId}] Successfully parsed ${validIngredients.length} ingredients via LLM fallback (after potential correction). Yield:`, parsedYield);
                      } else {
                          console.warn(`[${jobId}] LLM fallback returned ingredients array, but items lacked structure or name. Result:`, llmFallbackResult);
                          throw new Error('LLM fallback extracted no valid ingredients.');
@@ -1504,7 +1591,7 @@ app.post('/api/process-url-job', async (req, res) => {
         // --- Final Update ---
         if (recipeResult) {
              await updateJobStatus(jobId, 'completed', { result: recipeResult });
-             console.log(`[${jobId}] Processing complete.`);
+             console.log(`[${jobId}] Processing complete. Final result saved:`, recipeResult);
         } else {
              // This path should ideally not be reached if fallback error handling is correct
              console.error(`[${jobId}] Reached end of processing unexpectedly without a result or explicit failure.`);

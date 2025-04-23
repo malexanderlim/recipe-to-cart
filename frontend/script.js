@@ -299,8 +299,8 @@ document.addEventListener('DOMContentLoaded', () => {
                          displayQuantity = displayQuantity.toString(); 
                      }
                      const unit = itemData.unit || '';
-                     const ingredient = itemData.ingredient || '';
-                     const text = `${displayQuantity} ${unit} ${ingredient}`.replace(/\s+/g, ' ').trim();
+                     const ingredientName = itemData.name || '';
+                     const text = `${displayQuantity} ${unit} ${ingredientName}`.replace(/\s+/g, ' ').trim();
                      label.textContent = text; // Update the text of the existing label
                  }
              });
@@ -338,8 +338,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 displayQuantity = displayQuantity.toString(); 
             }
             const unit = item.unit || '';
-            const ingredient = item.ingredient || '';
-            const text = `${displayQuantity} ${unit} ${ingredient}`.replace(/\s+/g, ' ').trim();
+            const ingredientName = item.name || '';
+            const text = `${displayQuantity} ${unit} ${ingredientName}`.replace(/\s+/g, ' ').trim();
             
             // Unique ID for the checkbox and label association
             const checkboxId = `ingredient-${recipeData.id}-${index}`;
@@ -802,31 +802,47 @@ document.addEventListener('DOMContentLoaded', () => {
         const isChecked = event.target.checked;
         const shouldBeChecked = !isChecked; // If master is checked, items should be unchecked (false), and vice versa
         
-        // Iterate through all recipes and ingredients
-        processedRecipes.forEach(recipeData => {
-            if (recipeData.ingredients && recipeData.ingredients.length > 0) {
-                recipeData.ingredients.forEach((item, index) => {
-                    const ingredientNameLower = (item.ingredient || '').toLowerCase();
+        // --- Combine sources: Iterate through both completed/failed recipes and in-progress ones --- 
+        const allRecipeSources = [
+            ...processedRecipes, // Completed/failed recipes
+            ...Object.values(recipeData) // In-progress recipes from the map
+        ]; 
+        // Use a Set to avoid processing the same recipe ID twice if it somehow exists in both briefly during transition
+        const processedIds = new Set(); 
+
+        allRecipeSources.forEach(recipeInfo => {
+            // Skip if we already processed this ID (relevant if item just finished and is in both)
+            if (!recipeInfo || processedIds.has(recipeInfo.id)) {
+                return;
+            }
+            processedIds.add(recipeInfo.id);
+
+            // --- Original logic applied to recipeInfo --- 
+            if (recipeInfo.ingredients && recipeInfo.ingredients.length > 0) {
+                recipeInfo.ingredients.forEach((item, index) => {
+                    const ingredientNameLower = (item.name || '').toLowerCase(); // Use item.name
                     // Check if the ingredient name contains any common keyword
                     const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
                     
                     if (isCommon) {
-                        // Update the data
-                        item.checked = shouldBeChecked;
+                        // Update the data (ensure item object exists)
+                        if (item) item.checked = shouldBeChecked;
+                        
                         // Update the corresponding checkbox in the DOM
-                        const checkboxElement = document.getElementById(`ingredient-${recipeData.id}-${index}`);
+                        const checkboxElement = document.getElementById(`ingredient-${recipeInfo.id}-${index}`);
                         if (checkboxElement) {
                             checkboxElement.checked = shouldBeChecked;
                         }
                     }
                 });
             }
+            // --- End Original logic --- 
         });
+        // --- End Combined sources --- 
 
         if (isChecked) {
-            console.log("Unchecked common pantry items.");
+            console.log("Pantry checkbox checked - Unchecked common items."); // Clarified log
         } else {
-             // --- Logic added for re-checking ---
             console.log("Pantry checkbox unchecked - Re-checking common items.");
         }
         // Might need to update button state if disabling when *all* are unchecked is desired
@@ -835,61 +851,59 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- NEW: Function to start polling ---
     function startPollingJobStatus(recipeId, jobId) {
-        const recipeData = processedRecipes.find(r => r.id === recipeId);
-        if (!recipeData) {
-            console.error(`[Polling ${jobId}] Cannot start polling, recipe data not found for ID: ${recipeId}`);
+        const recipeInfo = recipeData[recipeId];
+        if (!recipeInfo) {
+            console.error(`[Polling ${jobId}] Cannot start polling, recipe data not found in map for ID: ${recipeId}`);
             return;
         }
 
         // Clear any previous intervals/timeouts for this recipe
-        if (recipeData.pollingIntervalId) clearInterval(recipeData.pollingIntervalId);
-        if (recipeData.pollingTimeoutId) clearTimeout(recipeData.pollingTimeoutId);
+        if (recipeInfo.pollingIntervalId) clearInterval(recipeInfo.pollingIntervalId);
+        if (recipeInfo.pollingTimeoutId) clearTimeout(recipeInfo.pollingTimeoutId);
 
-        recipeData.pollingAttempts = 0; // Reset attempts counter
+        recipeInfo.pollingAttempts = 0; // Reset attempts counter
 
         // Initial immediate check
         pollJobStatus(recipeId, jobId);
 
         // Set up polling interval
-        recipeData.pollingIntervalId = setInterval(() => {
+        recipeInfo.pollingIntervalId = setInterval(() => {
             pollJobStatus(recipeId, jobId);
         }, POLLING_INTERVAL);
 
         // Set up overall timeout (e.g., 20 seconds)
-        recipeData.pollingTimeoutId = setTimeout(() => {
+        recipeInfo.pollingTimeoutId = setTimeout(() => {
             console.warn(`[Recipe ${recipeId}] Polling timed out after ${POLLING_TIMEOUT_MS}ms.`);
-            clearInterval(recipeData.pollingIntervalId); // Stop polling
+            clearInterval(recipeInfo.pollingIntervalId); // Stop polling
             // Set error message based on last known status
-            if (recipeData.lastKnownStatus === 'vision_completed') {
-                recipeData.error = 'Recipe analysis timed out. Please try again.';
+            if (recipeInfo.lastKnownStatus === 'vision_completed') {
+                recipeInfo.error = 'Recipe analysis timed out. Please try again.';
             } else {
-                recipeData.error = 'Processing timed out. Please try again.';
+                recipeInfo.error = 'Processing timed out. Please try again.';
             }
-            renderSingleRecipeResult(recipeData, false); // Render error state
+            renderSingleRecipeResult(recipeInfo, false); // Render error state
             updateCreateListButtonState();
         }, POLLING_TIMEOUT_MS);
     }
 
     // --- NEW: Function to poll status --- 
     async function pollJobStatus(recipeId, jobId) {
-        const recipeData = processedRecipes.find(r => r.id === recipeId);
-        if (!recipeData) {
-            console.error(`[Polling ${jobId}] Cannot poll, recipe data not found for ID: ${recipeId}`);
-            // Attempt to clear interval if it exists (though unlikely path)
-            const intervalId = recipeData?.pollingIntervalId; // Use optional chaining
-            if (intervalId) clearInterval(intervalId);
+        const recipeInfo = recipeData[recipeId];
+        if (!recipeInfo) {
+            console.error(`[Polling ${jobId}] Cannot poll, recipe data not found in map for ID: ${recipeId}`);
+            // Cannot clear intervals if recipeInfo is not found
             return;
         }
 
-        recipeData.pollingAttempts += 1;
-        console.log(`[Recipe ${recipeId}] Polling attempt ${recipeData.pollingAttempts} for job ${jobId}...`);
+        recipeInfo.pollingAttempts += 1;
+        console.log(`[Recipe ${recipeId}] Polling attempt ${recipeInfo.pollingAttempts} for job ${jobId}...`);
 
-        if (recipeData.pollingAttempts > MAX_POLLING_ATTEMPTS) {
+        if (recipeInfo.pollingAttempts > MAX_POLLING_ATTEMPTS) {
             console.warn(`[Recipe ${recipeId}] Max polling attempts reached for recipe ${recipeId}. Stopping polling.`);
-            clearInterval(recipeData.pollingIntervalId);
-            recipeData.pollingIntervalId = null;
-            recipeData.error = 'Processing timed out. Please try again.';
-            renderSingleRecipeResult(recipeData, false); // Show timeout error
+            clearInterval(recipeInfo.pollingIntervalId);
+            recipeInfo.pollingIntervalId = null;
+            recipeInfo.error = 'Processing timed out. Please try again.';
+            renderSingleRecipeResult(recipeInfo, false); // Show timeout error
             updateCreateListButtonState();
             return;
         }
@@ -900,30 +914,59 @@ document.addEventListener('DOMContentLoaded', () => {
 
             console.log(`[Recipe ${recipeId}] Job Status Response:`, JSON.stringify(data));
 
-            recipeData.lastKnownStatus = data.status; // Update last known status
+            recipeInfo.lastKnownStatus = data.status; // Update last known status
 
             // --- Update UI based on specific status --- 
-            renderSingleRecipeResult(recipeData, true, `Processing...`, data.status);
+            renderSingleRecipeResult(recipeInfo, true, `Processing...`, data.status);
 
             if (data.status === 'completed') {
                 console.log(`[Recipe ${recipeId}] Job completed successfully.`);
                 stopPolling(recipeId); // Stop polling and timeout
                 // Update recipe data with results
-                recipeData.title = data.result.title || recipeData.file.name;
-                recipeData.yield = data.result.yield || null;
-                recipeData.ingredients = data.result.ingredients || [];
-                recipeData.extractedText = data.result.extractedText;
-                recipeData.scaleFactor = 1; // Reset scale factor
-                recipeData.error = null; // Clear any previous error
-                renderSingleRecipeResult(recipeData, false); // Render final result
+                recipeInfo.title = data.result.title || (recipeInfo.file ? recipeInfo.file.name : recipeInfo.inputUrl);
+                recipeInfo.yield = data.result.yield || null;
+                recipeInfo.ingredients = data.result.ingredients || [];
+                recipeInfo.extractedText = data.result.extractedText;
+                recipeInfo.scaleFactor = 1; // Reset scale factor
+                recipeInfo.error = null; // Clear any previous error
+                
+                // *** Important: Move completed data from map to array ***
+                // Check if it's already been pushed (e.g., multiple 'completed' polls)
+                if (!processedRecipes.find(r => r.id === recipeId)) {
+                    processedRecipes.push(recipeInfo);
+                }
+                // Remove from the map once processing is final
+                delete recipeData[recipeId];
+                // ****************************************************
+
+                renderSingleRecipeResult(recipeInfo, false); // Render final result
                 updateCreateListButtonState();
+                
+                // If this was the last job being processed, create the pantry checkbox
+                if (Object.keys(recipeData).length === 0 && !document.getElementById('pantry-checkbox-container')) {
+                    createPantryCheckbox();
+                }
+
             } else if (data.status === 'failed') {
                 console.error(`[Recipe ${recipeId}] Job failed. Reason:`, data.error);
                 stopPolling(recipeId); // Stop polling and timeout
-                recipeData.error = data.error || 'Processing failed.'; // Store the error
-                // Re-render the card to show the error
-                renderSingleRecipeResult(recipeData, false);
-            } else if (data.status === 'pending' || data.status === 'vision_completed') {
+                recipeInfo.error = data.error || 'Processing failed.'; // Store the error
+                
+                // *** Important: Move failed data from map to array for display ***
+                 if (!processedRecipes.find(r => r.id === recipeId)) {
+                     processedRecipes.push(recipeInfo);
+                 }
+                 delete recipeData[recipeId]; // Remove from map
+                // ***********************************************************
+
+                renderSingleRecipeResult(recipeInfo, false); // Re-render the card to show the error
+
+                // If this was the last job being processed, create the pantry checkbox
+                if (Object.keys(recipeData).length === 0 && !document.getElementById('pantry-checkbox-container')) {
+                    createPantryCheckbox();
+                }
+
+            } else if (data.status === 'pending' || data.status === 'vision_completed' || data.status === 'processing_started' || data.status === 'fetching_html' || data.status === 'parsing_jsonld' || data.status === 'llm_parsing_ingredients' || data.status === 'parsing_readability' || data.status === 'llm_parsing_fallback' ) { // Added URL statuses
                 // Continue polling, check max attempts
                 // DO NOT render final state here - handled by timeout or next successful poll
             } else if (data.status === 'not_found') {
@@ -934,7 +977,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn(`[Recipe ${recipeId}] Received unexpected status '${data.status}' for recipe ${recipeId}.`);
                 // Optionally continue polling a few more times or treat as failure
                 // For now, treat as pending to avoid premature failure
-                renderSingleRecipeResult(recipeData, true, `Processing... (Status: ${data.status})`);
+                renderSingleRecipeResult(recipeInfo, true, `Processing... (Status: ${data.status})`);
             }
         } catch (error) {
             console.error(`[Recipe ${recipeId}] Error during polling:`, error);
@@ -944,16 +987,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Helper function to stop polling and clear timeout
     function stopPolling(recipeId, errorMessage = null) {
-        const recipeData = processedRecipes.find(r => r.id === recipeId);
-        if (!recipeData) return;
-        if (recipeData.pollingIntervalId) clearInterval(recipeData.pollingIntervalId);
-        if (recipeData.pollingTimeoutId) clearTimeout(recipeData.pollingTimeoutId);
-        recipeData.pollingIntervalId = null;
-        recipeData.pollingTimeoutId = null;
+        const recipeInfo = recipeData[recipeId];
+        if (!recipeInfo) {
+            console.warn(`[Polling Stop] Recipe data not found in map for ID: ${recipeId} when trying to stop polling.`);
+            return; // Cannot stop intervals/timeouts if data object not found
+        }
+        if (recipeInfo.pollingIntervalId) clearInterval(recipeInfo.pollingIntervalId);
+        if (recipeInfo.pollingTimeoutId) clearTimeout(recipeInfo.pollingTimeoutId);
+        recipeInfo.pollingIntervalId = null;
+        recipeInfo.pollingTimeoutId = null;
         if (errorMessage) {
-             recipeData.error = errorMessage;
+             recipeInfo.error = errorMessage;
              // Optional: Re-render immediately to show the error if needed
-             // renderSingleRecipeResult(recipeData, false); 
+             // renderSingleRecipeResult(recipeInfo, false);
+             
+             // *** Important: Move error data from map to array if stopping with error ***
+             if (!processedRecipes.find(r => r.id === recipeId)) {
+                 processedRecipes.push(recipeInfo);
+             }
+             delete recipeData[recipeId]; // Remove from map
+            // ***********************************************************
+
+             // If this was the last job being processed, create the pantry checkbox
+             if (Object.keys(recipeData).length === 0 && !document.getElementById('pantry-checkbox-container')) {
+                 createPantryCheckbox();
+             }
         }
     }
 
@@ -1002,19 +1060,22 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`Processing URL (${tempId}): ${url}`);
     
         // Add to global store and render initial pending state
-        // Access recipeData (defined globally)
         recipeData[tempId] = {
+            id: tempId, // Ensure the ID is also stored here
             status: 'pending_upload', // Initial status before job starts
             jobId: null,
             error: null,
+            yield: null, // <-- Initialize yield
             result: null,
+            ingredients: [], // Initialize ingredients array
+            scaleFactor: 1, // Initialize scale factor
             sourceType: 'url',
             inputUrl: url,
-            pollingTimeoutId: null, // Changed from pollingTimeoutId
-            pollingIntervalId: null, // Added for consistency 
+            pollingTimeoutId: null, 
+            pollingIntervalId: null, 
             startTime: Date.now(),
-            pollingAttempts: 0, // Added for consistency
-            lastKnownStatus: null // Added for consistency
+            pollingAttempts: 0, 
+            lastKnownStatus: null 
         };
         // Call renderSingleRecipeResult (now in the same scope)
         console.log('Checking if renderSingleRecipeResult is defined:', typeof renderSingleRecipeResult);
@@ -1035,12 +1096,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.status === 202) {
                 const { jobId } = await response.json();
                 console.log(`URL ${tempId} processing job started with ID: ${jobId}`);
-                if (recipeData[tempId]) {
-                    recipeData[tempId].jobId = jobId;
-                    recipeData[tempId].status = 'pending'; // Update status to reflect job is running
-                    // Call renderSingleRecipeResult (now in the same scope)
-                    renderSingleRecipeResult(recipeData[tempId], true, 'Processing...', 'pending'); 
-                    // Call startPollingJobStatus (now in the same scope)
+                const recipeInfo = recipeData[tempId]; // Get ref to the object in map
+                if (recipeInfo) {
+                    recipeInfo.jobId = jobId;
+                    recipeInfo.status = 'pending'; // Update status to reflect job is running
+                    renderSingleRecipeResult(recipeInfo, true, 'Processing...', 'pending'); 
                     startPollingJobStatus(tempId, jobId); 
                 } else {
                      console.error(`Recipe data for tempId ${tempId} not found after API call.`);
@@ -1048,20 +1108,20 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const errorText = await response.text();
                 console.error(`Error starting URL processing job for ${tempId}: ${response.status} ${errorText}`);
-                if (recipeData[tempId]) {
-                    recipeData[tempId].status = 'failed';
-                    recipeData[tempId].error = `Failed to start processing: ${response.status} ${errorText || 'Server error'}`;
-                    // Call renderSingleRecipeResult (now in the same scope)
-                    renderSingleRecipeResult(recipeData[tempId], false); 
+                const recipeInfo = recipeData[tempId]; // Get ref
+                if (recipeInfo) {
+                    recipeInfo.status = 'failed';
+                    recipeInfo.error = `Failed to start processing: ${response.status} ${errorText || 'Server error'}`;
+                    renderSingleRecipeResult(recipeInfo, false); 
                 }
             }
         } catch (error) {
             console.error(`Network or fetch error processing URL ${tempId}:`, error);
-            if (recipeData[tempId]) {
-                recipeData[tempId].status = 'failed';
-                recipeData[tempId].error = `Network error: ${error.message}`;
-                // Call renderSingleRecipeResult (now in the same scope)
-                renderSingleRecipeResult(recipeData[tempId], false); 
+            const recipeInfo = recipeData[tempId]; // Get ref
+            if (recipeInfo) {
+                recipeInfo.status = 'failed';
+                recipeInfo.error = `Network error: ${error.message}`;
+                renderSingleRecipeResult(recipeInfo, false); 
             }
         }
     } // <<< Corrected closing brace for processSingleUrl
