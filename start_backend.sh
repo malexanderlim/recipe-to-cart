@@ -1,18 +1,40 @@
 #!/bin/bash
-# Navigate to the backend directory and start the server
+# Load Google credentials (Ensure this path is correct relative to where you run the script)
+# Example: If run from root, path might be ./recipe-vision-sa-key.json
+# If run from backend, path might be ../recipe-vision-sa-key.json
+# Using the path from your log for now:
+# KEY_PATH="../recipe-vision-sa-key.json"
+# if [ -f "$KEY_PATH" ]; then
+#     export GOOGLE_APPLICATION_CREDENTIALS=$(readlink -f "$KEY_PATH") # Get absolute path
+#     echo "Loaded Google credentials from ${GOOGLE_APPLICATION_CREDENTIALS} into environment variable."
+# else
+#     echo "Warning: Google credentials file not found at $KEY_PATH. Vision API might fail."
+# fi
 
-cd backend || exit
+# Navigate to the backend directory (assuming script is run from project root)
+# If script is already IN backend dir, remove the cd command.
+echo "Changing to backend directory..."
+cd backend || { echo "Failed to change directory to backend. Exiting."; exit 1; }
 
-# Export the Google credentials JSON content as an environment variable
-# Check if the key file exists first
-KEY_FILE="../recipe-vision-sa-key.json" # Path relative to backend dir
-if [ -f "$KEY_FILE" ]; then
-  export GOOGLE_APPLICATION_CREDENTIALS=$(cat "$KEY_FILE")
-  echo "Loaded Google credentials from $KEY_FILE into environment variable."
+# --- Set Google Credentials AFTER changing directory ---
+KEY_PATH_RELATIVE_TO_BACKEND="../recipe-vision-sa-key.json" # Assuming key is in project root
+if [ -f "$KEY_PATH_RELATIVE_TO_BACKEND" ]; then
+    export GOOGLE_APPLICATION_CREDENTIALS="$KEY_PATH_RELATIVE_TO_BACKEND"
+    echo "Set GOOGLE_APPLICATION_CREDENTIALS to relative path: $GOOGLE_APPLICATION_CREDENTIALS"
 else
-  echo "WARNING: Google credentials file not found at $KEY_FILE. Vision API calls will likely fail."
+    echo "Warning: Google credentials file not found at $KEY_PATH_RELATIVE_TO_BACKEND (relative to backend dir). Vision API might fail."
+fi
+# --------------------------------------------------
+
+# Ensure dependencies are installed
+echo "Ensuring backend dependencies are installed..."
+npm install
+INSTALL_EXIT_CODE=$?
+if [ $INSTALL_EXIT_CODE -ne 0 ]; then
+    echo "npm install failed with exit code $INSTALL_EXIT_CODE. Exiting."
+    exit $INSTALL_EXIT_CODE
 fi
 
+# Start the server
 echo "Starting backend server..."
-# Run node, dotenv will load .env from within the script
 node server.js 

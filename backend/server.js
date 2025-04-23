@@ -1,5 +1,4 @@
-require('dotenv').config({ path: './.env' }); // Re-enabled for local development
-
+require('dotenv').config({ path: require('path').resolve(__dirname, './.env') }); // Ensure .env is loaded relative to server.js
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -8,29 +7,67 @@ const { ImageAnnotatorClient } = require('@google-cloud/vision');
 const Anthropic = require('@anthropic-ai/sdk'); // <-- Ensure Anthropic SDK is required
 const axios = require('axios');
 const heicConvert = require('heic-convert');
-const { Redis } = require('@upstash/redis'); // CHANGED: Import Upstash Redis
 const { put, del } = require('@vercel/blob');
 const crypto = require('crypto');
+const { kv } = require('@vercel/kv');
+const { JSDOM } = require('jsdom'); // For Readability
+const { Readability } = require('@mozilla/readability'); // For Readability
+const cheerio = require('cheerio'); // For HTML parsing / JSON-LD extraction
 
-// --- Initialize Upstash Redis Client ---
+// --- Upstash Redis Initialization --- 
+const { Redis } = require("@upstash/redis");
 let redis;
 try {
   if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-    throw new Error('Upstash Redis environment variables (UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN) are not set.');
+    // If running locally and variables are missing, don't throw, just warn and disable Redis features
+    if (!isVercel) {
+      console.warn('Upstash Redis environment variables not set for local development. Image processing will fail.');
+      redis = null;
+    } else {
+      // If on Vercel, these ARE required
+      throw new Error('Upstash Redis environment variables (UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN) are not set on Vercel.');
+    }
+  } else {
+    redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    });
+    console.log('Successfully initialized Upstash Redis client.');
   }
-  redis = new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN,
-  });
-  console.log('Successfully initialized Upstash Redis client.');
 } catch (error) {
    console.error('Failed to initialize Upstash Redis client:', error);
    redis = null; // Ensure it's null if init failed
 }
 // ---------------------------------------
 
-const app = express();
-const port = process.env.PORT || 3001;
+// --- KV Initialization (Real or Mock) ---
+let kvClient;
+const isVercel = process.env.VERCEL === '1'; // Vercel sets this environment variable
+
+if (isVercel) {
+    console.log("Running in Vercel environment, using real Vercel KV.");
+    kvClient = kv; // Use the imported real client
+} else {
+    console.log("Running locally, using in-memory KV mock.");
+    const localKvStore = {}; // Our simple in-memory store
+    kvClient = {
+        async get(key) {
+            // console.log(`[Mock KV GET] ${key}`);
+            return Promise.resolve(localKvStore[key] || null);
+        },
+        async set(key, value) {
+            // console.log(`[Mock KV SET] ${key}:`, value);
+            localKvStore[key] = value;
+            return Promise.resolve('OK'); // Mimic Redis 'OK' response
+        },
+        // Add other methods like del, incr if needed, but get/set are primary for async job state
+        async del(key) {
+            delete localKvStore[key];
+            return Promise.resolve(1); // Mimic Redis '1' for success
+        }
+    };
+}
+// --- End KV Initialization ---
 
 // --- Setup Anthropic Client ---
 const anthropic = new Anthropic({
@@ -39,6 +76,8 @@ const anthropic = new Anthropic({
 // ----------------------------
 
 // --- Middleware ---
+const app = express();
+const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -50,37 +89,43 @@ const upload = multer({ storage: storage });
 // --- Google Cloud Setup ---
 let visionClient;
 try {
-  const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (!credentialsJson) {
+  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!credentialsPath) {
+    // If the variable isn't set at all, throw an error.
     throw new Error('GOOGLE_APPLICATION_CREDENTIALS environment variable is not set.');
   }
-  const credentials = JSON.parse(credentialsJson);
-  // Explicitly pass credentials to the client constructor
-  visionClient = new ImageAnnotatorClient({ credentials });
-  console.log('Successfully initialized Google Cloud Vision client with provided credentials.');
+  // REMOVED: Manual parsing - let the client library handle the path from the env var.
+  // const credentials = JSON.parse(credentialsPath);
+
+  // Initialize the client - it will automatically use the GOOGLE_APPLICATION_CREDENTIALS env var path.
+  visionClient = new ImageAnnotatorClient();
+  console.log('Successfully initialized Google Cloud Vision client (using GOOGLE_APPLICATION_CREDENTIALS environment variable).');
 } catch (error) {
   console.error('Failed to initialize Google Cloud Vision client:', error);
-  // Decide how to handle this - maybe exit or prevent API calls?
-  // For now, we log the error. Subsequent calls using visionClient will likely fail.
+  // Log the problematic path if the error is related to it
+  if (error.message.includes('Could not load the default credentials') || error.message.includes('Could not find file')) {
+      console.error(`Check if the path specified in GOOGLE_APPLICATION_CREDENTIALS is correct: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
+  }
   visionClient = null; // Ensure it's null if init failed
 }
 // ------------------------
 
-
 // --- Helper Function for Anthropic Calls ---
-async function callAnthropic(systemPrompt, userPrompt) {
-    console.log("Calling Anthropic API...");
+async function callAnthropic(systemPrompt, userPrompt, model = 'claude-3-haiku-20240307', max_tokens = 4096) {
+    console.log(`Calling Anthropic model ${model}...`);
     try {
         const response = await anthropic.messages.create({
-            model: "claude-3-haiku-20240307", // <-- Use Haiku model for cost efficiency
-            max_tokens: 4096, // INCREASED: Allow larger JSON output, esp. for create-list
-            temperature: 0.1, // Low temperature for deterministic results
+            model: model,
+            max_tokens: max_tokens,
+            temperature: 0.1, // Keep low temp for consistency
             system: systemPrompt,
             messages: [{ role: "user", content: userPrompt }]
         });
         console.log("Anthropic API response received.");
 
+        // Check for valid response structure
         if (response.content && response.content.length > 0 && response.content[0].type === 'text') {
+            // Return ONLY the raw text content
             return response.content[0].text;
         } else {
             console.error("Anthropic response format unexpected:", response);
@@ -88,13 +133,164 @@ async function callAnthropic(systemPrompt, userPrompt) {
         }
     } catch (error) {
         console.error("Error calling Anthropic API:", error);
-        // Include more details if available (e.g., error type, status code from Anthropic)
         const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
         throw new Error(`Anthropic API Error: ${errorMessage}`);
     }
 }
-// -----------------------------------------
 
+// --- Job Status Update Helper ---
+async function updateJobStatus(jobId, status, data = {}) {
+    try {
+        let currentData = await kvClient.get(jobId);
+        // If job data doesn't exist when trying to update, log a warning and return.
+        // This prevents errors if a status update arrives after a job was potentially deleted or failed very early.
+        if (!currentData) {
+             console.warn(`[${jobId}] Job data not found in KV when trying to update status to ${status}. Ignoring update.`);
+            return;
+        }
+        currentData.status = status;
+        Object.assign(currentData, data); // Merge new data (e.g., error message, result)
+        
+        // Set end time only on terminal statuses
+        if (status === 'completed' || status === 'failed') {
+             currentData.endTime = Date.now();
+             // Optional: Log duration
+             if (currentData.startTime) {
+                 console.log(`[${jobId}] Job finished with status ${status} in ${currentData.endTime - currentData.startTime}ms`);
+             } else {
+                console.log(`[${jobId}] Job finished with status ${status}.`);
+             }
+        } else {
+            console.log(`[${jobId}] Status updated to ${status}.`);
+        }
+
+        await kvClient.set(jobId, currentData);
+
+    } catch (error) {
+        console.error(`[${jobId}] Failed to update job status to ${status} in KV:`, error);
+        // Consider if retrying KV set makes sense here depending on error type
+    }
+}
+
+// --- NEW Helper: Parse JSON, with LLM correction fallback ---
+// Tries to parse JSON. If it fails, asks the LLM to fix the syntax.
+// Removed invalid type annotation from expectedType
+async function parseAndCorrectJson(jobId, rawJsonResponse, expectedType) {
+    // Default to 'object' if not specified or invalid
+    if (expectedType !== 'array') {
+        expectedType = 'object';
+    }
+    console.log(`[${jobId}] Attempting to parse JSON (expected type: ${expectedType}). Raw length: ${rawJsonResponse?.length}`);
+    let parsedJson = null;
+    let jsonString = rawJsonResponse?.trim() || '';
+
+    // Initial attempt: Strict extraction and parsing
+    try {
+        let extractedString = null;
+        if (expectedType === 'array') {
+            // Try to find array strictly delimited by optional whitespace
+            const arrayMatchStrict = jsonString.match(/^\\s*(\\[[\\s\\S]*\\])\\s*$/);
+            if (arrayMatchStrict) {
+                extractedString = arrayMatchStrict[1];
+            } else {
+                // Fallback: find first '[' and last ']'
+                const firstBracket = jsonString.indexOf('[');
+                const lastBracket = jsonString.lastIndexOf(']');
+                if (firstBracket !== -1 && lastBracket > firstBracket) {
+                    extractedString = jsonString.substring(firstBracket, lastBracket + 1);
+                    console.log(`[${jobId}] Used fallback bracket finding for array.`);
+                } else {
+                    throw new Error(`Response does not appear to contain a JSON array.`);
+                }
+            }
+        } else { // expectedType === 'object'
+             // Try to find object strictly delimited by optional whitespace
+            const objectMatchStrict = jsonString.match(/^\\s*(\\{[\\s\\S]*\\})\\s*$/);
+            if (objectMatchStrict) {
+                extractedString = objectMatchStrict[1];
+            } else {
+                // Fallback: find first '{' and last '}'
+                 const firstBrace = jsonString.indexOf('{');
+                 const lastBrace = jsonString.lastIndexOf('}');
+                 if (firstBrace !== -1 && lastBrace > firstBrace) {
+                     extractedString = jsonString.substring(firstBrace, lastBrace + 1);
+                     console.log(`[${jobId}] Used fallback brace finding for object.`);
+                 } else {
+                    throw new Error(`Response does not appear to contain a JSON object.`);
+                 }
+            }
+        }
+
+        // Clean potential trailing commas before final bracket/brace
+        extractedString = extractedString.replace(/,\\s*([}\\]])/g, '$1');
+
+        parsedJson = JSON.parse(extractedString);
+        console.log(`[${jobId}] Initial JSON parse successful.`);
+
+        // Final type check
+        if (expectedType === 'array' && !Array.isArray(parsedJson)) {
+             throw new Error(`Parsed result is not an array, but expected one. Found: ${typeof parsedJson}`);
+        }
+        if (expectedType === 'object' && (typeof parsedJson !== 'object' || Array.isArray(parsedJson) || parsedJson === null)) {
+             throw new Error(`Parsed result is not an object, but expected one. Found: ${typeof parsedJson}`);
+        }
+        return parsedJson; // SUCCESS
+
+    } catch (initialParseError) {
+        console.warn(`[${jobId}] Initial JSON parse failed: ${initialParseError.message}. Attempting LLM correction.`);
+        // Use the original potentially messy jsonString for correction attempt
+        console.warn(`[${jobId}] Faulty JSON string being sent for correction: ${jsonString.substring(0, 500)}...`);
+
+        // --- Correction Attempt ---
+        try {
+            const correctionSystemPrompt = "You are a JSON syntax correction expert. The user will provide a string that is *supposed* to be valid JSON, but contains syntax errors. Your ONLY task is to fix the syntax errors (missing commas, brackets, quotes, etc.) and return ONLY the corrected, valid JSON string. Do not add any explanations or change the data structure.";
+            // Use the original rawJsonResponse in the prompt for correction
+            const correctionUserPrompt = `Please fix the syntax errors in the following JSON string and return only the corrected JSON string:\\n\\n\\\`\\\`\\\`json\\n${jsonString}\\n\\\`\\\`\\\`\\n\\nCorrected JSON:`;
+
+            // Use callAnthropic (assuming it returns raw string)
+            const correctedJsonStringRaw = await callAnthropic(correctionSystemPrompt, correctionUserPrompt, 'claude-3-haiku-20240307', jsonString.length + 500); // Give some buffer
+
+            console.log(`[${jobId}] Received potential corrected JSON string from LLM. Length: ${correctedJsonStringRaw?.length}`);
+
+            // Re-attempt parsing on the *corrected* string, using similar extraction logic
+            let correctedJsonString = correctedJsonStringRaw?.trim() || '';
+            let finalCorrectedString = null;
+
+             if (expectedType === 'array') {
+                 const arrayMatchStrict = correctedJsonString.match(/^\\s*(\\[[\\s\\S]*\\])\\s*$/);
+                 if (arrayMatchStrict) { finalCorrectedString = arrayMatchStrict[1]; }
+                 else { const first = correctedJsonString.indexOf('['); const last = correctedJsonString.lastIndexOf(']'); if(first !== -1 && last > first) finalCorrectedString = correctedJsonString.substring(first, last+1); }
+             } else { // object
+                 const objectMatchStrict = correctedJsonString.match(/^\\s*(\\{[\\s\\S]*\\})\\s*$/);
+                  if (objectMatchStrict) { finalCorrectedString = objectMatchStrict[1]; }
+                  else { const first = correctedJsonString.indexOf('{'); const last = correctedJsonString.lastIndexOf('}'); if(first !== -1 && last > first) finalCorrectedString = correctedJsonString.substring(first, last+1); }
+             }
+
+             if (!finalCorrectedString) {
+                 throw new Error("LLM correction response did not contain expected JSON structure.");
+             }
+
+             finalCorrectedString = finalCorrectedString.replace(/,\\s*([}\\]])/g, '$1'); // Clean trailing commas again
+             parsedJson = JSON.parse(finalCorrectedString);
+
+             console.log(`[${jobId}] Successfully parsed corrected JSON.`);
+
+             // Final type check again
+             if (expectedType === 'array' && !Array.isArray(parsedJson)) throw new Error("Corrected result is not an array.");
+             if (expectedType === 'object' && (typeof parsedJson !== 'object' || Array.isArray(parsedJson) || parsedJson === null)) throw new Error("Corrected result is not an object.");
+
+            return parsedJson; // SUCCESS after correction
+
+        } catch (correctionError) {
+            console.error(`[${jobId}] Failed to parse JSON even after LLM correction: ${correctionError.message}`);
+            console.error(`[${jobId}] Original faulty JSON: ${jsonString.substring(0, 500)}...`);
+            // console.error(`[${jobId}] Corrected attempt raw string: ${correctedJsonStringRaw?.substring(0, 500)}...`); // Optionally log corrected attempt
+            return null; // FAILURE after correction attempt
+        }
+    }
+}
+
+// --- Routes ---
 
 // Endpoint for image upload and initial parsing (Stage 1) ASYNCHRONOUS
 app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
@@ -198,7 +394,6 @@ app.post('/api/upload', upload.array('recipeImages'), async (req, res) => {
         res.status(500).json({ error: 'Failed to initiate image processing.', details: error.message });
     }
 });
-
 
 // Background processing endpoint (triggered by /api/upload)
 app.post('/api/process-image', async (req, res) => {
@@ -392,7 +587,6 @@ app.post('/api/process-image', async (req, res) => {
     }
 });
 
-
 // Endpoint for frontend polling to check job status
 app.get('/api/job-status', async (req, res) => {
     const { jobId } = req.query;
@@ -401,26 +595,35 @@ app.get('/api/job-status', async (req, res) => {
     }
 
     try {
-        if (!redis) { throw new Error('Redis client not initialized'); }
-        const jobData = await redis.get(jobId); // Assign directly, no parsing needed
+        // if (!redis) { throw new Error('Redis client not initialized'); } // <-- Incorrect: Was using Redis for all jobs
+        // const jobData = await redis.get(jobId); // <-- Incorrect: Was using Redis for all jobs
+
+        // --- Corrected Logic: Use kvClient (mock or real KV) --- 
+        const jobData = await kvClient.get(jobId);
+        // --------------------------------------------------------
+
         if (!jobData) { // Check the object directly
             // If job isn't found, it might have expired or never existed
-            console.warn(`[Job Status] Job data not found in Redis for Job ID: ${jobId}`);
+            // Updated log message to reflect kvClient usage
+            console.warn(`[Job Status] Job data not found in KV for Job ID: ${jobId}`);
             return res.status(404).json({ status: 'not_found', error: 'Job not found or expired.' });
         }
 
+        // Check if result needs parsing (needed if KV stores strings, but mock/real KV store objects)
+        // Let's assume kvClient directly returns the object for now.
+        // If errors occur later, we might need: const parsedResult = typeof jobData.result === 'string' ? JSON.parse(jobData.result) : jobData.result;
+
         res.json({
             status: jobData.status,
-            result: jobData.result,
+            result: jobData.result, // Send result directly
             error: jobData.error
         });
 
     } catch (error) {
-        console.error(`[Job Status] Error fetching status for Job ID ${jobId} from Redis:`, error);
+        console.error(`[Job Status] Error fetching status for Job ID ${jobId} from KV:`, error); // Updated log
         res.status(500).json({ error: 'Failed to retrieve job status.', details: error.message });
     }
 });
-
 
 // Endpoint to create Instacart list (incorporating Stage 2 LLM)
 // ********** V7: SINGLE LLM CALL FOR NORMALIZATION & CONVERSIONS, ALGO FOR MATH **********
@@ -800,7 +1003,6 @@ Final JSON Output:
     }
 });
 
-
 // Endpoint to create Instacart list (incorporating Stage 2 LLM)
 // ********** THIS IS THE REFACTORED ENDPOINT BASED ON THE REVISED HYBRID PLAN **********
 app.post('/api/send-to-instacart', async (req, res) => {
@@ -1033,6 +1235,383 @@ app.post('/api/process-text', async (req, res) => {
 
 // --- End NEW Function ---
 
+// --- New URL Processing Routes ---
+
+// POST /api/process-url (Trigger)
+app.post('/api/process-url', async (req, res) => {
+    const { url } = req.body;
+    let jobId = `url-${crypto.randomUUID()}`; // Define jobId early for logging
+    console.log(`[${jobId}] Received request for /api/process-url`);
+
+    if (!url) {
+        console.log(`[${jobId}] Invalid request: URL is missing.`);
+        return res.status(400).json({ error: 'URL is required' });
+    }
+
+    let validatedUrl;
+    try {
+        validatedUrl = new URL(url);
+        if (!['http:', 'https:'].includes(validatedUrl.protocol)) {
+             throw new Error('URL must use http or https protocol');
+        }
+    } catch (error) {
+        console.log(`[${jobId}] Invalid request: URL format error - ${error.message}`);
+        return res.status(400).json({ error: `Invalid URL format: ${error.message}` });
+    }
+
+    const jobData = {
+        status: 'pending',
+        inputUrl: url,
+        startTime: Date.now(),
+        sourceType: 'url'
+    };
+
+    try {
+        console.log(`[${jobId}] Step 1: Attempting kvClient.set...`);
+        await kvClient.set(jobId, jobData);
+        console.log(`[${jobId}] Step 2: Initial job data set in KV for URL: ${url}`);
+
+        // Use 3001 as the default port to match server listen
+        const port = process.env.PORT || 3001; 
+        console.log(`[${jobId}] Step 3: Determined port: ${port}, isVercel: ${isVercel}`);
+        const triggerUrl = isVercel
+            ? '/api/process-url-job'
+            : `http://localhost:${port}/api/process-url-job`;
+        console.log(`[${jobId}] Step 4: Constructed triggerUrl: ${triggerUrl}`);
+
+        console.log(`[${jobId}] Step 5: Initiating fire-and-forget fetch using top-level import...`);
+        // REMOVE the local require: const nodeFetch = require('node-fetch'); 
+        // Use the 'fetch' variable required at the top of the file
+        fetch(triggerUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ jobId }),
+        }).catch(fetchError => {
+            console.error(`[${jobId}] ASYNC CATCH: Error triggering background job (fetch failed):`, fetchError);
+            updateJobStatus(jobId, 'failed', { error: `Failed to trigger background processing task: ${fetchError.message}` });
+        });
+        console.log(`[${jobId}] Step 6: Fire-and-forget fetch dispatched.`);
+
+        console.log(`[${jobId}] Step 7: Attempting to send 202 response...`);
+        res.status(202).json({ jobId });
+        console.log(`[${jobId}] Step 8: Successfully sent 202 response.`);
+
+    } catch (error) { // Catch block for SYNCHRONOUS errors in the try block
+        console.error(`[${jobId}] SYNC CATCH: Error in /api/process-url try block:`, error);
+        if (!res.headersSent) {
+             console.log(`[${jobId}] Sending 500 error response to client.`);
+             res.status(500).json({ error: 'Failed to initiate URL processing job' });
+        } else {
+             console.error(`[${jobId}] Headers already sent, could not send 500 error response.`);
+        }
+    }
+});
+
+// Helper function to parse yield strings (e.g., "16 servings", "makes 1 loaf")
+function parseYieldString(yieldStr) {
+    if (!yieldStr || typeof yieldStr !== 'string') return null;
+    // Regex: Optional non-digits at start, capture first number (int/float), capture subsequent words/hyphens as unit
+    const match = yieldStr.match(/^[^\d]*?(\d+(?:[.,]\d+)?)\s*([\w\s-]+)/);
+    if (match && match[1]) {
+        const quantity = parseFloat(match[1].replace(',', '.')) || null;
+        // Clean up unit: trim whitespace, remove leading/trailing punctuation often used ("(makes...)")
+        const unit = match[2] ? match[2].trim().replace(/^[()[\]]+|[()[\]]+$/g, '').trim().toLowerCase() : null;
+        if (quantity) {
+            // Basic pluralization check for common units
+            const unitSingular = (unit?.endsWith('s') && !['servings'].includes(unit)) ? unit.slice(0, -1) : unit;
+            return { quantity, unit: (quantity === 1 ? unitSingular : unit) || null };
+        }
+    }
+    // Fallback: If no unit found after number, just return quantity
+    const quantityOnlyMatch = yieldStr.match(/^[^\d]*?(\d+(?:[.,]\d+)?)/);
+    if (quantityOnlyMatch && quantityOnlyMatch[1]) {
+        return { quantity: parseFloat(quantityOnlyMatch[1].replace(',', '.')) || null, unit: null };
+    }
+    return null; // Could not parse
+}
+
+// POST /api/process-url-job (Background Worker)
+app.post('/api/process-url-job', async (req, res) => {
+    const { jobId } = req.body;
+    if (!jobId) {
+        console.error('Received process-url-job request without jobId');
+        return res.status(400).json({ error: 'Job ID is required' });
+    }
+
+    console.log(`[${jobId}] Starting URL background processing...`);
+    let jobData;
+    try {
+        jobData = await kvClient.get(jobId);
+        // Check if job exists and hasn't already finished
+        if (!jobData || jobData.status === 'completed' || jobData.status === 'failed') {
+             console.warn(`[${jobId}] Job not found or already processed (${jobData?.status}). Skipping.`);
+             return res.status(200).json({ message: 'Job already processed or not found' }); // Acknowledge request but do nothing
+        }
+
+        const { inputUrl } = jobData;
+        await updateJobStatus(jobId, 'processing_started'); // New status
+        console.log(`[${jobId}] Processing URL: ${inputUrl}`);
+
+        // --- Step 1: Fetch HTML ---
+        let htmlContent = '';
+        let finalUrl = inputUrl; // Track final URL after redirects
+        try {
+             await updateJobStatus(jobId, 'fetching_html');
+             console.log(`[${jobId}] Fetching HTML from ${inputUrl}...`);
+             const response = await fetch(inputUrl, {
+                 headers: {
+                     // Add a realistic User-Agent to reduce chance of being blocked
+                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                     'Accept-Language': 'en-US,en;q=0.9',
+                     'Connection': 'keep-alive',
+                     'DNT': '1', // Do Not Track header
+                     'Upgrade-Insecure-Requests': '1'
+                 },
+                 redirect: 'follow', // Follow redirects
+                 timeout: 15000 // Add a timeout (15 seconds)
+             });
+             finalUrl = response.url; // Store final URL after redirects
+
+             console.log(`[${jobId}] Fetch response status: ${response.status}, Final URL: ${finalUrl}`);
+
+             if (!response.ok) {
+                 throw new Error(`HTTP error ${response.status} ${response.statusText}`);
+             }
+             const contentType = response.headers.get('content-type');
+             if (!contentType || !contentType.toLowerCase().includes('text/html')) {
+                 throw new Error(`Expected HTML content, but got ${contentType}`);
+             }
+             htmlContent = await response.text();
+             console.log(`[${jobId}] HTML content fetched (${htmlContent.length} bytes).`);
+
+             // Basic Login Wall Check (Refined slightly)
+             const lowerHtml = htmlContent.toLowerCase();
+             const lowerFinalUrl = finalUrl.toLowerCase();
+             if (lowerHtml.includes('log in') || lowerHtml.includes('sign in') || lowerHtml.includes('create account') || lowerFinalUrl.includes('/login') || lowerFinalUrl.includes('/signin') || lowerFinalUrl.includes('/account') ) {
+                 // More specific checks might be needed based on common login page patterns
+                 console.warn(`[${jobId}] Potential login wall detected.`);
+                  throw new Error('Potential login wall detected on page. Authentication required.');
+             }
+
+        } catch (fetchError) {
+             console.error(`[${jobId}] Error fetching or validating HTML:`, fetchError);
+             await updateJobStatus(jobId, 'failed', { error: `Failed to fetch or validate URL: ${fetchError.message}` });
+             return res.status(200).json({ message: 'Fetch failed, job updated.' }); // Acknowledge worker request
+        }
+
+        let recipeResult = null; // Variable to hold the final extracted recipe data
+
+        // --- Step 2: Attempt JSON-LD Extraction ---
+        try {
+             await updateJobStatus(jobId, 'parsing_jsonld');
+             console.log(`[${jobId}] Attempting JSON-LD extraction...`);
+             const $ = cheerio.load(htmlContent);
+             let recipeJson = null;
+
+             $('script[type="application/ld+json"]').each((index, element) => {
+                 try {
+                     const scriptContent = $(element).html();
+                     if (!scriptContent) return;
+                     const jsonData = JSON.parse(scriptContent);
+
+                     function findRecipe(data) { /* ... (findRecipe function from previous attempt) ... */
+                         if (Array.isArray(data)) {
+                             for (const item of data) {
+                                 const found = findRecipe(item);
+                                 if (found) return found;
+                             }
+                         } else if (typeof data === 'object' && data !== null) {
+                             if (data['@type'] === 'Recipe' || (Array.isArray(data['@type']) && data['@type'].includes('Recipe'))) {
+                                 return data;
+                             }
+                             if (data['@graph']) { // Check within @graph array
+                                 return findRecipe(data['@graph']);
+                             }
+                         }
+                         return null;
+                     }
+
+
+                     recipeJson = findRecipe(jsonData);
+                     if (recipeJson) {
+                         console.log(`[${jobId}] Found Recipe JSON-LD object.`);
+                         return false; // Stop iterating once found
+                     }
+                 } catch (parseError) {
+                     console.warn(`[${jobId}] Error parsing JSON-LD script tag:`, parseError.message);
+                 }
+             });
+
+             if (recipeJson && recipeJson.recipeIngredient && Array.isArray(recipeJson.recipeIngredient) && recipeJson.recipeIngredient.length > 0) {
+                 console.log(`[${jobId}] Extracting title, yield, and ingredients from JSON-LD.`);
+                 const title = recipeJson.name || 'Recipe from URL';
+
+                 // --- Updated Yield Parsing Logic ---
+                 let parsedYield = null; // Default to null object
+                 if (recipeJson.recipeYield) {
+                     const rawYield = recipeJson.recipeYield;
+                     console.log(`[${jobId}] Raw JSON-LD yield:`, rawYield);
+
+                     if (typeof rawYield === 'object' && rawYield !== null && !Array.isArray(rawYield)) {
+                        // Try common object patterns (schema.org examples)
+                         const quant = rawYield.value ?? rawYield.yieldValue ?? rawYield.valueReference?.value ?? null;
+                         const unit = rawYield.unitText ?? rawYield.unitCode ?? rawYield.valueReference?.unitText ?? null;
+                         if (quant !== null) {
+                             const quantityNum = parseFloat(String(quant).replace(',', '.')) || null;
+                             if (quantityNum) { // Check if parsing was successful
+                                 parsedYield = { quantity: quantityNum, unit: unit || null };
+                             }
+                         }
+                         // If parsing object failed, maybe it has a string representation?
+                         if (!parsedYield && typeof rawYield.description === 'string') { 
+                             parsedYield = parseYieldString(rawYield.description);
+                         }
+                     } else if (typeof rawYield === 'string') {
+                        parsedYield = parseYieldString(rawYield);
+                     } else if (Array.isArray(rawYield) && rawYield.length > 0) {
+                        // --- Refined Array Handling: Prioritize element with digits and letters ---
+                        let elementToParse = rawYield[0]; // Default to first
+                        const bestElement = rawYield.find(el => typeof el === 'string' && /\d/.test(el) && /[a-zA-Z]/.test(el));
+                        if (bestElement) {
+                            elementToParse = bestElement; // Use the element with both numbers and text
+                            console.log(`[${jobId}] Prioritizing yield element with text: "${elementToParse}"`);
+                        }
+                        // ----------------------------------------------------------------------
+
+                        // Now parse the selected element
+                        if (typeof elementToParse === 'string') {
+                            parsedYield = parseYieldString(elementToParse);
+                        } else if (typeof elementToParse === 'object' && elementToParse !== null) {
+                            // (Keep object parsing logic if needed for non-string array elements)
+                            const quant = elementToParse.value ?? elementToParse.yieldValue ?? null;
+                            const unit = elementToParse.unitText ?? elementToParse.unitCode ?? null;
+                            if (quant !== null) {
+                                 const quantityNum = parseFloat(String(quant).replace(',', '.')) || null;
+                                 if (quantityNum) {
+                                     parsedYield = { quantity: quantityNum, unit: unit || null };
+                                 }
+                            }
+                        }
+                     }
+                 }
+                 console.log(`[${jobId}] Parsed JSON-LD yield object:`, parsedYield);
+                 // --- End Updated Yield Parsing Logic ---
+
+                 const ingredientStrings = recipeJson.recipeIngredient.filter(s => typeof s === 'string' && s.trim() !== ''); // Ensure strings
+
+                 if (ingredientStrings.length > 0) {
+                    // ** Use updated prompt **
+                    const ingredientsPrompt = `The following ingredient strings were extracted from a recipe's structured data (JSON-LD). Parse them for grocery shopping list creation. For each string, identify the quantity (number or null), unit (string or null, using common units like cup, tsp, tbsp, oz, lb, g, kg, each, etc.), and the ingredient name (string). Ingredient List:\\n${ingredientStrings.map(s => `- ${s}`).join('\\n')}\\n\\nCRITICAL INSTRUCTION: Respond ONLY with a single **valid** JSON array [{quantity, unit, name}]. Do NOT include ANY other text, explanations, or markdown formatting. Ensure the JSON syntax is perfect.`;
+                    const ingredientsSystemPrompt = "You are an expert ingredient parser assisting with grocery list creation for Instacart. Convert raw ingredient strings into a JSON array of objects [{quantity, unit, name}]. Use null for missing quantity or unit. Respond ONLY with the **valid** JSON array itself, starting with [ and ending with ].";
+
+                    await updateJobStatus(jobId, 'llm_parsing_ingredients');
+                    const llmIngredientsResponse = await callAnthropic(ingredientsSystemPrompt, ingredientsPrompt);
+
+                    // ** Use Correction Helper **
+                    const llmIngredientsResult = await parseAndCorrectJson(jobId, llmIngredientsResponse, 'array'); // <-- INTEGRATED CALL
+
+                    if (llmIngredientsResult) { // Check if correction helper returned a result
+                        const validIngredients = llmIngredientsResult.filter(item => typeof item === 'object' && item !== null && 'name' in item)
+                            .map(item => ({ quantity: item.quantity ?? null, unit: item.unit ?? null, name: item.name })); // Ensure nulls
+                        if (validIngredients.length > 0) {
+                            // Use the parsedYield from above
+                            recipeResult = { title, yield: parsedYield, ingredients: validIngredients, sourceUrl: finalUrl };
+                            console.log(`[${jobId}] Successfully parsed ${validIngredients.length} ingredients via LLM from JSON-LD (after potential correction).`);
+                        } else { console.warn(`[${jobId}] LLM JSON-LD result was valid array, but content lacked required structure.`); }
+                    } else { console.warn(`[${jobId}] Could not get valid ingredient array from LLM for JSON-LD, even after correction attempt.`); }
+                 } else { console.log(`[${jobId}] No valid ingredient strings found in JSON-LD.`); }
+             } else { console.log(`[${jobId}] No valid Recipe JSON-LD found or ingredients missing/empty.`); }
+        } catch (jsonLdError) { console.error(`[${jobId}] Error during JSON-LD processing phase:`, jsonLdError); }
+
+        // --- Step 3: Fallback to Readability + LLM ---
+        if (!recipeResult) { // Only run if JSON-LD didn't yield a result
+            try {
+                 await updateJobStatus(jobId, 'parsing_readability');
+                 console.log(`[${jobId}] JSON-LD failed or insufficient. Falling back to Readability + LLM...`);
+                 const doc = new JSDOM(htmlContent, { url: finalUrl }); // Provide URL for relative path resolution
+                 const reader = new Readability(doc.window.document);
+                 const article = reader.parse();
+
+                 if (!article || !article.textContent || article.textContent.trim().length < 100) { // Add length check
+                     throw new Error(`Readability could not extract sufficient main content (Length: ${article?.textContent?.trim()?.length || 0}).`);
+                 }
+
+                 console.log(`[${jobId}] Readability extracted content (Title: ${article.title}, Length: ${article.textContent.length}).`);
+                 // Limit text length to avoid excessive token usage and cost
+                 const maxContentLength = 18000; // Approx limit for Haiku context, leaving room for prompt
+                 const mainTextContent = article.textContent.substring(0, maxContentLength);
+                 const fallbackTitle = article.title || 'Recipe from URL'; // Use title from Readability
+
+                 // ** Use updated prompt **
+                 // Updated prompt to request yield as an object
+                 const fallbackPrompt = `Please analyze the following text content from a recipe webpage to extract information for a grocery list. Identify: \\n1. The recipe title (string).\\n2. The recipe yield as a JSON object { "quantity": number|null, "unit": string|null } (e.g., { "quantity": 4, "unit": "servings" }, { "quantity": 1, "unit": "dozen" }, or null if unclear).\\n3. A list of ingredients. For each ingredient, determine the quantity (number or null), unit (string or null, use common units like cup, tsp, tbsp, oz, lb, g, kg, each, etc.), and the ingredient name (string). \\nIgnore cooking instructions, comments, ads, and other non-essential text. \\nRecipe Text:\\n---\\n${mainTextContent}\\n---\\n\\nCRITICAL INSTRUCTION: Respond ONLY with a single **valid** JSON object containing the keys "title", "yield" (object or null), and "ingredients" (array). Ensure the JSON syntax is perfect. Do NOT include ANY other text, explanations, or markdown formatting.`;
+                 // Updated system prompt for yield object
+                 const fallbackSystemPrompt = "You are an expert recipe parser assisting with grocery list creation for Instacart. Extract the recipe title, yield, and ingredients from the provided text. Output ONLY a **valid** JSON object with keys `title` (string), `yield` (object `{ quantity, unit }` or null), and `ingredients` (array of objects `[{quantity, unit, name}]`). Use null for missing quantity or unit values.";
+
+                 await updateJobStatus(jobId, 'llm_parsing_fallback');
+                 const llmFallbackResponse = await callAnthropic(fallbackSystemPrompt, fallbackPrompt);
+
+                 // ** Use Correction Helper **
+                 const llmFallbackResult = await parseAndCorrectJson(jobId, llmFallbackResponse, 'object'); // <-- INTEGRATED CALL
+
+                 if (llmFallbackResult && Array.isArray(llmFallbackResult.ingredients)) { // Check if correction helper returned a result
+                     const validIngredients = llmFallbackResult.ingredients.filter(item => typeof item === 'object' && item !== null && 'name' in item && item.name.trim() !== '')
+                         .map(item => ({ quantity: item.quantity ?? null, unit: item.unit ?? null, name: item.name })); // Ensure nulls
+                     if (validIngredients.length > 0) {
+                         // --- Correctly assign yield object --- 
+                         const parsedYield = (typeof llmFallbackResult.yield === 'object' && llmFallbackResult.yield !== null) 
+                                               ? { quantity: llmFallbackResult.yield.quantity ?? null, unit: llmFallbackResult.yield.unit ?? null }
+                                               : null; // Default to null if not a valid object
+                         recipeResult = { 
+                             title: llmFallbackResult.title || fallbackTitle, 
+                             yield: parsedYield, // Assign the parsed object or null
+                             ingredients: validIngredients, 
+                             sourceUrl: finalUrl 
+                         };
+                         // -------------------------------------
+                         console.log(`[${jobId}] Successfully parsed ${validIngredients.length} ingredients via LLM fallback (after potential correction). Yield:`, parsedYield);
+                     } else {
+                         console.warn(`[${jobId}] LLM fallback returned ingredients array, but items lacked structure or name. Result:`, llmFallbackResult);
+                         throw new Error('LLM fallback extracted no valid ingredients.');
+                     }
+                 } else {
+                     console.warn(`[${jobId}] LLM fallback failed to return valid structured data. Result:`, llmFallbackResult);
+                     throw new Error('Failed to extract recipe details using fallback LLM method.');
+                 }
+            } catch (fallbackError) {
+                 console.error(`[${jobId}] Error during Readability/Fallback LLM processing:`, fallbackError);
+                 await updateJobStatus(jobId, 'failed', { error: `Fallback extraction failed: ${fallbackError.message}` });
+                 return res.status(200).json({ message: 'Fallback failed, job updated.' });
+            }
+        }
+
+        // --- Final Update ---
+        if (recipeResult) {
+             await updateJobStatus(jobId, 'completed', { result: recipeResult });
+             console.log(`[${jobId}] Processing complete. Final result saved:`, recipeResult);
+        } else {
+             // This path should ideally not be reached if fallback error handling is correct
+             console.error(`[${jobId}] Reached end of processing unexpectedly without a result or explicit failure.`);
+             await updateJobStatus(jobId, 'failed', { error: 'Processing finished unexpectedly without extracting a valid recipe.' });
+        }
+
+        res.status(200).json({ message: 'Processing finished acknowledged.' }); // Acknowledge worker request
+
+    } catch (error) {
+        // Catch unexpected errors during the overall worker process setup/logic flow
+        console.error(`[${jobId}] CRITICAL error during URL background processing:`, error);
+        // Attempt to update KV status if jobData was retrieved
+        if (jobId) { // Check if jobId exists before trying to update status
+            await updateJobStatus(jobId, 'failed', { error: `Unexpected server error during processing: ${error.message}` });
+        }
+        // Respond with error, mainly for server logs as client isn't waiting
+        res.status(500).json({ error: 'Background processing failed critically' });
+    }
+});
+
 // Basic route
 app.get('/', (req, res) => {
     res.send('Recipe-to-Cart Backend is running!');
@@ -1041,4 +1620,7 @@ app.get('/', (req, res) => {
 // Start server
 app.listen(port, () => {
     console.log(`Server listening at http://localhost:${port}`);
+    if (!isVercel) {
+        console.log(`Local development mode active (using mock KV).`);
+    }
 });
