@@ -12,12 +12,16 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
     "@google-cloud/vision": "^5.1.0",
+    "@mozilla/readability": "^0.6.0",
     "@upstash/redis": "^1.31.6",
     "@vercel/blob": "^1.0.0",
+    "@vercel/kv": "^3.0.0",
     "axios": "^1.8.4",
+    "cheerio": "^1.0.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "heic-convert": "^2.1.0",
+    "jsdom": "^26.1.0",
     "multer": "^1.4.5-lts.1",
     "parse-ingredient": "^1.2.1"
   },

@@ -10,9 +10,13 @@
     <h1>Recipe to Instacart</h1>
 
     <div class="container">
-        <section id="upload-section">
+        <section id="upload-section" class="step-section">
             <h2>1. Upload Recipe Image(s)</h2>
-            <input type="file" id="recipe-image-upload" name="recipe-image-upload" accept="image/*" multiple>
+            <input type="file" id="recipeImages" accept="image/*,.heic,.heif" multiple>
+            <div class="url-input-container">
+                <input type="url" id="recipeUrlInput" placeholder="Or paste Recipe URL here">
+                <button id="addUrlButton">Add URL</button>
+            </div>
             <p class="helper-text">(Supports JPG, PNG, HEIC, etc. Select one or more files.)</p>
             <div id="image-preview-area"></div>
         </section>

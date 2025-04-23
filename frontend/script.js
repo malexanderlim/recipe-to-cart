@@ -1,5 +1,8 @@
+// Global store for recipe data and status
+let recipeData = {}; // { 'tempId-xyz': { status: 'pending', file: File, jobId: null, error: null, result: null, sourceType: 'file'|'url', inputUrl: null }, ... }
+
 document.addEventListener('DOMContentLoaded', () => {
-    const imageUploadInput = document.getElementById('recipe-image-upload');
+    const imageUploadInput = document.getElementById('recipeImages');
     const imagePreviewArea = document.getElementById('image-preview-area');
     // Container for multiple recipe results
     const recipeResultsContainer = document.getElementById('recipe-results-container'); 
@@ -962,12 +965,110 @@ document.addEventListener('DOMContentLoaded', () => {
             errorElement.remove(); // Remove specific error message
         }
     }
-});
 
-// Keep existing detectYield, displayImagePreview, setInstacartLoadingState, 
-// displayInstacartError, clearInstacartResults, displayInstacartLink functions here for now
+    // --- URL Processing Logic moved inside DOMContentLoaded ---
+    const addUrlButton = document.getElementById('addUrlButton');
+    const recipeUrlInput = document.getElementById('recipeUrlInput');
 
-// --- Existing code to be kept (or moved inside DOMContentLoaded if not already) ---
+    if (addUrlButton && recipeUrlInput) {
+        addUrlButton.addEventListener('click', () => {
+            console.log('Add URL button clicked!');
+            const url = recipeUrlInput.value.trim();
+            if (url) {
+                console.log('URL entered:', url);
+                processSingleUrl(url); // Call the function now defined inside
+                recipeUrlInput.value = ''; // Clear input after adding
+            } else {
+                console.log('URL input was empty.');
+                alert('Please enter a valid URL.');
+            }
+        });
+    }
+    // Add listener for pressing Enter in the URL input
+    if (recipeUrlInput) {
+        recipeUrlInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') {
+                console.log('Enter key pressed in URL input.');
+                event.preventDefault(); // Prevent default form submission if any
+                addUrlButton.click(); // Trigger the button click
+            }
+        });
+    }
+    
+    // Moved function definition inside DOMContentLoaded
+    async function processSingleUrl(url) {
+        console.log(`processSingleUrl function called with URL: ${url}`);
+        const tempId = `tempId-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        console.log(`Processing URL (${tempId}): ${url}`);
+    
+        // Add to global store and render initial pending state
+        // Access recipeData (defined globally)
+        recipeData[tempId] = {
+            status: 'pending_upload', // Initial status before job starts
+            jobId: null,
+            error: null,
+            result: null,
+            sourceType: 'url',
+            inputUrl: url,
+            pollingTimeoutId: null, // Changed from pollingTimeoutId
+            pollingIntervalId: null, // Added for consistency 
+            startTime: Date.now(),
+            pollingAttempts: 0, // Added for consistency
+            lastKnownStatus: null // Added for consistency
+        };
+        // Call renderSingleRecipeResult (now in the same scope)
+        console.log('Checking if renderSingleRecipeResult is defined:', typeof renderSingleRecipeResult);
+        renderSingleRecipeResult(recipeData[tempId], true, 'Initializing...'); 
+    
+        try {
+            console.log(`[${tempId}] Sending request to /api/process-url...`);
+            // Access backendUrl (defined inside DOMContentLoaded)
+            const response = await fetch(`${backendUrl}/api/process-url`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ url: url }),
+            });
+            console.log(`[${tempId}] Received response status: ${response.status}`);
+    
+            if (response.status === 202) {
+                const { jobId } = await response.json();
+                console.log(`URL ${tempId} processing job started with ID: ${jobId}`);
+                if (recipeData[tempId]) {
+                    recipeData[tempId].jobId = jobId;
+                    recipeData[tempId].status = 'pending'; // Update status to reflect job is running
+                    // Call renderSingleRecipeResult (now in the same scope)
+                    renderSingleRecipeResult(recipeData[tempId], true, 'Processing...', 'pending'); 
+                    // Call startPollingJobStatus (now in the same scope)
+                    startPollingJobStatus(tempId, jobId); 
+                } else {
+                     console.error(`Recipe data for tempId ${tempId} not found after API call.`);
+                }
+            } else {
+                const errorText = await response.text();
+                console.error(`Error starting URL processing job for ${tempId}: ${response.status} ${errorText}`);
+                if (recipeData[tempId]) {
+                    recipeData[tempId].status = 'failed';
+                    recipeData[tempId].error = `Failed to start processing: ${response.status} ${errorText || 'Server error'}`;
+                    // Call renderSingleRecipeResult (now in the same scope)
+                    renderSingleRecipeResult(recipeData[tempId], false); 
+                }
+            }
+        } catch (error) {
+            console.error(`Network or fetch error processing URL ${tempId}:`, error);
+            if (recipeData[tempId]) {
+                recipeData[tempId].status = 'failed';
+                recipeData[tempId].error = `Network error: ${error.message}`;
+                // Call renderSingleRecipeResult (now in the same scope)
+                renderSingleRecipeResult(recipeData[tempId], false); 
+            }
+        }
+    } // <<< Corrected closing brace for processSingleUrl
+
+}); // <<< END OF DOMContentLoaded LISTENER
+
+// Keep existing globally defined functions like detectYield, displayImagePreview, etc., OUTSIDE DOMContentLoaded
 function detectYield(text) {
     if (!text) return null;
     const yieldRegex = /(serves|yields|makes)(?:[:\s]+(?:about|approx\.?))?\s*(\d+(?:[.,]\d+)?)\s*([a-z\s()]+)?/i;
