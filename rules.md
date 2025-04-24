@@ -68,3 +68,15 @@ This document outlines key rules and best practices to follow during development
     *   **Problem:** When dynamically generating HTML (e.g., in JavaScript) that includes elements with IDs or specific classes, and later trying to select or manipulate those elements using `getElementById`, `querySelector`, etc., inconsistencies in the generated ID format or selector string will cause the lookup to fail silently or throw errors.
     *   **Rule:** Ensure that the exact string format used to generate an element's ID or the selectors used to query elements (including class names) are identical between the code that creates the HTML and the code that later tries to find or interact with those elements. Pay close attention to template literals, variable interpolation, and specific class names.
     *   **Verification:** When debugging issues where DOM manipulation isn't working, log the generated ID/selector from the creation code and the queried ID/selector from the manipulation code to verify they match exactly. Use browser developer tools (Elements tab) to inspect the rendered HTML and confirm the actual IDs/classes present. 
+
+13. **Prefer Libraries for Standard Problems:**
+    *   **Problem:** Re-implementing complex, standard functionality like URL validation or date formatting from scratch increases development time, risks missing edge cases, and reduces maintainability.
+    *   **Rule:** For common, well-defined problems (e.g., validation, data manipulation, specific API interactions), **prioritize using established, well-maintained libraries** (like `validator.js` for validation) over custom implementations.
+    *   **Verification:** Before writing complex validation or utility logic, perform a quick search (web or package manager) for existing libraries that solve the specific problem. Justify custom implementations if no suitable library is found or if specific constraints prevent library use.
+
+14. **Decouple Rendering and Post-Render Logic:**
+    *   **Problem:** Race conditions can occur when JavaScript tries to access or modify DOM elements that depend on asynchronous data or are created dynamically, especially if the access attempt happens before the element is fully rendered or if the logic relies on other dynamically created elements (like the pantry checkbox influencing ingredient checkboxes).
+    *   **Rule:** When logic depends on the state of dynamically created elements or needs to manipulate them *after* they are rendered: 
+        1. Keep the initial HTML generation simple (e.g., default states).
+        2. Place the logic that accesses or modifies these elements *after* the code that inserts the HTML into the DOM (e.g., after `element.innerHTML = ...`).
+    *   **Verification:** Review code that dynamically generates HTML and then immediately interacts with it. Ensure the interaction logic runs *after* the HTML is part of the document, especially if the logic relies on elements created in the same dynamic block. 

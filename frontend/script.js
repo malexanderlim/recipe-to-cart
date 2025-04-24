@@ -1,6 +1,17 @@
 // Global store for recipe data and status
 let recipeData = {}; // { 'tempId-xyz': { status: 'pending', file: File, jobId: null, error: null, result: null, sourceType: 'file'|'url', inputUrl: null }, ... }
 
+// *** Define helper for empty state visibility ***
+function updateEmptyStateVisibility() {
+    const emptyStateMessage = document.getElementById('empty-state-message');
+    if (emptyStateMessage) {
+        // Check if the recipeData map (for in-progress) OR processedRecipes array (for completed/failed) has items
+        const hasRecipes = Object.keys(recipeData).length > 0 || processedRecipes.length > 0;
+        emptyStateMessage.style.display = hasRecipes ? 'none' : 'block';
+        console.log(`Updating empty state visibility. Has recipes: ${hasRecipes}. Display: ${emptyStateMessage.style.display}`);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const imageUploadInput = document.getElementById('recipeImages');
     const imagePreviewArea = document.getElementById('image-preview-area');
@@ -76,26 +87,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // Remove listeners for single yield controls
 
+    // --- Ensure empty state is correct on load --- 
+    updateEmptyStateVisibility(); // Call the helper on load
+
     // New handler for multiple files
     async function handleMultipleImageUpload(event) {
         const files = event.target.files;
         if (!files || files.length === 0) return;
 
-        clearAllResults(); // Clear everything before processing new batch
-        setLoadingState(true, files.length); // Indicate loading for multiple files
+        clearAllResults(); // Shows empty state via updateEmptyStateVisibility called inside
+        setLoadingState(true, files.length); 
 
-        processedRecipes = []; // Reset recipe data store
+        updateEmptyStateVisibility(); // Call helper instead
+
+        processedRecipes = []; 
 
         for (const file of files) {
             displayImagePreview(file); // Show preview/filename for current file being processed
             await processSingleFile(file);
+            updateEmptyStateVisibility(); // Update after each file potentially adds to recipeData
         }
-
-        // --- Add createPantryCheckbox() call here, after processing --- 
-        createPantryCheckbox(); 
         
-        setLoadingState(false); // Hide loading indicator when all done
-        updateCreateListButtonState(); // Enable/disable button based on results
+        setLoadingState(false); 
+        updateCreateListButtonState(); 
+        updateEmptyStateVisibility(); // Final check after loop
     }
 
     // Function to process one file
@@ -171,7 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderSingleRecipeResult(recipeDataObj, false); // isLoading = false to show error
             updateCreateListButtonState(); // Re-evaluate button state after error
         }
-        // REMOVE the old synchronous result handling and re-rendering call here
+        updateEmptyStateVisibility(); // Call helper as recipeData is updated
     }
 
     // Renders the UI block for a single recipe
@@ -275,13 +290,33 @@ document.addEventListener('DOMContentLoaded', () => {
         // Add listener to parent UL for checkbox changes (event delegation)
         const ingredientsList = recipeDiv.querySelector('.ingredient-list');
         if (ingredientsList) {
-            // Remove previous listener if any to avoid duplicates on re-render
-            // A more robust approach might involve storing/removing listeners explicitly
             ingredientsList.removeEventListener('change', handleCheckboxChange); 
             ingredientsList.addEventListener('change', handleCheckboxChange);
-            // Add click listener to LI for toggling checkbox via label click
              ingredientsList.removeEventListener('click', handleListItemClick); 
             ingredientsList.addEventListener('click', handleListItemClick);
+
+            // *** NEW: Apply initial pantry check state AFTER rendering ***
+            if (pantryCheckbox && pantryCheckbox.checked) {
+                const checkboxes = ingredientsList.querySelectorAll('input.ingredient-checkbox');
+                checkboxes.forEach(checkbox => {
+                    const index = parseInt(checkbox.dataset.ingredientIndex, 10);
+                    const itemData = recipeData.ingredients[index];
+                    if (itemData && itemData.ingredient) {
+                        const isCommon = commonItemsKeywords.some(keyword => 
+                            (itemData.ingredient || '').toLowerCase().includes(keyword)
+                        );
+                        if (isCommon) {
+                            checkbox.checked = false; // Uncheck if pantry box is checked and item is common
+                            // Update label style if needed
+                            const label = ingredientsList.querySelector(`label[for='${checkbox.id}']`);
+                            if (label) {
+                                label.classList.add('line-through', 'text-gray-400');
+                            }
+                        }
+                    }
+                });
+            }
+            // *** END NEW ***
         }
     }
 
@@ -355,33 +390,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // UPDATED: Returns an HTML string for the ingredients list with checkboxes
     function renderParsedIngredientsHTML(recipeData) {
-        // Apply Tailwind classes to title and sub-heading
-        let html = `<h4 class="text-lg font-semibold mb-1">${recipeData.title || 'Recipe'}</h4>`;
-        html += `<h5 class="text-base font-medium text-gray-600 mb-2">Parsed Ingredients:</h5>`;
-        // Apply Tailwind list styling (optional, can add list-disc etc. if desired)
+        let html = `<h5 class="text-base font-medium text-gray-600 mb-2">Parsed Ingredients:</h5>`; 
         html += '<ul class="ingredients-list space-y-1">'; 
         recipeData.ingredients.forEach((item, index) => {
-            // *** ADD DEFENSIVE CHECK for item and item.ingredient ***
-            if (!item || typeof item.ingredient === 'undefined') {
-                console.warn(`[Pantry Check] Skipping invalid item at index ${index} for recipe ${recipeData.id}:`, item);
-                return; // Skip this iteration
-            }
-            // *** END CHECK ***
+            const isChecked = true; // Default to checked in the HTML string
 
-            const ingredientNameLower = (item.ingredient || '').toLowerCase(); // Now safe to access
-            // Check if the ingredient name contains any common keyword
-            const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
-            
-            if (isCommon) {
-                // Update the data (ensure item object exists)
-                if (item) item.checked = shouldBeChecked;
-                
-                // Update the corresponding checkbox in the DOM
-                const checkboxElement = document.getElementById(`ingredient-${recipeData.id}-${index}`);
-                if (checkboxElement) {
-                    checkboxElement.checked = shouldBeChecked;
-                }
-            }
+            const ingredientText = `${item.quantity || ''} ${item.unit || ''} ${item.ingredient || ''}`.trim();
+            const uniqueId = `ingredient-${recipeData.id}-${index}`;
+            html += `
+                <li class="flex items-center">
+                    <input type="checkbox" id="${uniqueId}" 
+                           data-recipe-id="${recipeData.id}" 
+                           data-ingredient-index="${index}" 
+                           checked  // Always initially checked in HTML
+                           class="ingredient-checkbox h-4 w-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500 mr-2 shrink-0">
+                    <label for="${uniqueId}" class="ingredient-label text-sm">
+                        ${ingredientText}
+                    </label>
+                </li>
+            `;
         });
         html += '</ul>';
         return html;
@@ -808,6 +835,7 @@ document.addEventListener('DOMContentLoaded', () => {
             existingCheckboxDiv.remove();
             pantryCheckbox = null; // Clear the reference
         }
+        updateEmptyStateVisibility(); // Call helper instead
     }
 
     // Placeholder functions (ensure clearInstacartResults is correct)
@@ -903,26 +931,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const containerDiv = document.createElement('div');
         containerDiv.id = 'pantry-checkbox-container';
-        containerDiv.style.marginBottom = '15px'; // Add some spacing
+        containerDiv.classList.add('flex', 'items-center', 'mb-4');
         
         pantryCheckbox = document.createElement('input');
         pantryCheckbox.type = 'checkbox';
         pantryCheckbox.id = 'pantry-items-checkbox';
+        pantryCheckbox.classList.add(
+            'h-4', 
+            'w-4', 
+            'text-orange-600',
+            'border-gray-300', 
+            'rounded', 
+            'focus:ring-orange-500',
+            'mr-2',
+            'shrink-0'
+        );
         
         const label = document.createElement('label');
         label.htmlFor = 'pantry-items-checkbox';
-        label.textContent = ' I have commonly found pantry items'; // Shorter label
-        label.style.cursor = 'pointer';
-        label.style.userSelect = 'none';
+        label.textContent = ' I have commonly found pantry items';
+        label.classList.add('text-sm', 'font-medium', 'text-gray-700', 'cursor-pointer', 'select-none');
 
         // Add helper text span
         const helperSpan = document.createElement('span');
-        helperSpan.classList.add('helper-text');
+        helperSpan.classList.add('text-xs', 'text-gray-500', 'ml-1');
         helperSpan.textContent = ' (salt, pepper, oil, sugar, etc. - quickly unchecks these)';
 
         containerDiv.appendChild(pantryCheckbox);
         containerDiv.appendChild(label);
-        containerDiv.appendChild(helperSpan); // Add helper text after label
+        containerDiv.appendChild(helperSpan);
 
         // Insert before the recipe results container
         resultsSection.insertBefore(containerDiv, recipeResultsContainer); 
@@ -936,58 +973,47 @@ document.addEventListener('DOMContentLoaded', () => {
         const isChecked = event.target.checked;
         const shouldBeChecked = !isChecked; // If master is checked, items should be unchecked (false), and vice versa
         
-        // --- Combine sources: Iterate through both completed/failed recipes and in-progress ones --- 
-        const allRecipeSources = [
-            ...processedRecipes, // Completed/failed recipes
-            ...Object.values(recipeData) // In-progress recipes from the map
-        ]; 
-        // Use a Set to avoid processing the same recipe ID twice if it somehow exists in both briefly during transition
-        const processedIds = new Set(); 
+        processedRecipes.forEach(recipeInfo => {
+            if (!recipeInfo || !recipeInfo.ingredients) return; // Skip if no recipe or ingredients
 
-        allRecipeSources.forEach(recipeInfo => {
-            // Skip if we already processed this ID (relevant if item just finished and is in both)
-            if (!recipeInfo || processedIds.has(recipeInfo.id)) {
-                return;
-            }
-            processedIds.add(recipeInfo.id);
+            recipeInfo.ingredients.forEach((item, index) => {
+                if (!item || typeof item.ingredient === 'undefined') return; // Skip invalid items
 
-            // --- Original logic applied to recipeInfo --- 
-            if (recipeInfo.ingredients && recipeInfo.ingredients.length > 0) {
-                recipeInfo.ingredients.forEach((item, index) => {
-                    // *** ADD DEFENSIVE CHECK for item and item.ingredient ***
-                    if (!item || typeof item.ingredient === 'undefined') {
-                        console.warn(`[Pantry Check] Skipping invalid item at index ${index} for recipe ${recipeInfo.id}:`, item);
-                        return; // Skip this iteration
-                    }
-                    // *** END CHECK ***
-
-                    const ingredientNameLower = (item.ingredient || '').toLowerCase(); // Now safe to access
-                    // Check if the ingredient name contains any common keyword
-                    const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
+                const ingredientNameLower = item.ingredient.toLowerCase();
+                const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
+                
+                if (isCommon) {
+                    // Update the data model (optional, but good practice)
+                    item.checked = shouldBeChecked;
                     
-                    if (isCommon) {
-                        // Update the data (ensure item object exists)
-                        if (item) item.checked = shouldBeChecked;
-                        
-                        // Update the corresponding checkbox in the DOM
-                        const checkboxElement = document.getElementById(`ingredient-${recipeInfo.id}-${index}`);
-                        if (checkboxElement) {
-                            checkboxElement.checked = shouldBeChecked;
+                    // Update the DOM checkbox
+                    const uniqueId = `ingredient-${recipeInfo.id}-${index}`;
+                    const checkboxElement = document.getElementById(uniqueId);
+                    if (checkboxElement) {
+                        checkboxElement.checked = shouldBeChecked;
+                    }
+
+                    // *** Add/Remove Label Styling ***
+                    const labelElement = document.querySelector(`label[for='${uniqueId}']`);
+                    if (labelElement) {
+                        if (shouldBeChecked) {
+                            // Item should be checked (pantry box unchecked)
+                            labelElement.classList.remove('line-through', 'text-gray-400');
+                        } else {
+                            // Item should be unchecked (pantry box checked)
+                            labelElement.classList.add('line-through', 'text-gray-400');
                         }
                     }
-                });
-            }
-            // --- End Original logic --- 
+                    // *** End Label Styling ***
+                }
+            });
         });
-        // --- End Combined sources --- 
 
         if (isChecked) {
-            console.log("Pantry checkbox checked - Unchecked common items."); // Clarified log
+            console.log("Pantry checkbox checked - Unchecked common items.");
         } else {
             console.log("Pantry checkbox unchecked - Re-checking common items.");
         }
-        // Might need to update button state if disabling when *all* are unchecked is desired
-        // updateCreateListButtonState(); 
     }
 
     // --- NEW: Function to start polling ---
@@ -1083,6 +1109,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 renderSingleRecipeResult(recipeInfo, false); // Render final result
                 updateCreateListButtonState();
+                updateEmptyStateVisibility(); // << Add call here
                 
                 // If this was the last job being processed, create the pantry checkbox
                 if (Object.keys(recipeData).length === 0 && !document.getElementById('pantry-checkbox-container')) {
@@ -1105,6 +1132,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 renderSingleRecipeResult(recipeInfo, false); // Re-render the card to show the error
                 updateCreateListButtonState(); // Update button state after failure
+                updateEmptyStateVisibility(); // << Add call here
 
                 // If this was the last job being processed, create the pantry checkbox
                 if (Object.keys(recipeData).length === 0 && !document.getElementById('pantry-checkbox-container')) {
@@ -1127,6 +1155,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error(`[Recipe ${recipeId}] Error during polling:`, error);
             stopPolling(recipeId, `Error during polling: ${error.message}`);
+            updateEmptyStateVisibility(); // << Add call here
         }
     }
 
@@ -1160,6 +1189,7 @@ document.addEventListener('DOMContentLoaded', () => {
                  createPantryCheckbox();
              }
         }
+        updateEmptyStateVisibility(); // Call helper as recipeData is updated
     }
 
     // --- Helper function to clear specific recipe card error ---
@@ -1311,6 +1341,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderSingleRecipeResult(recipeInfo, false); 
             }
         }
+        updateEmptyStateVisibility(); // Call helper as recipeData is updated
     } // <<< Closing brace for processSingleUrl
 
 }); // <<< RESTORED Closing brace for DOMContentLoaded listener

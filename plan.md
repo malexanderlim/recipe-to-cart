@@ -159,9 +159,9 @@ These issues directly impact the core value proposition or the demo user experie
     *   **Feedback Elements:** Style loading indicators, success messages, and error messages using Tailwind utilities for colors, borders, and padding.
 *   **[X] Apply Targeted Styling Improvements (Prioritized):**
     *   **[X] 1. Style Final Shopping List (Section 3):** In `displayReviewList`, apply Tailwind classes to the `ul` and `li` elements, including checkboxes and labels, for better structure and visual consistency (`border`, `padding`, `spacing`, custom checkbox styles).
-    *   **[ ] 2. Enhance Error/Loading Feedback:** Style global error/loading messages (e.g., for URL input, Instacart interactions). Add visual indicators (e.g., spinners) to individual recipe card loading states (`renderSingleRecipeResult`). **(Current Task)**
-    *   **[ ] 3. Refine Pantry Checkbox Area:** Style the helper text (`text-xs`, `text-gray-500`) and apply consistent Tailwind styling to the master pantry checkbox.
-    *   **[ ] 4. Final Consistency Pass:** Review all sections for minor inconsistencies in padding, margins, font sizes, alignment, etc.
+    *   **[X] 2. Enhance Error/Loading Feedback:** Style global error/loading messages (e.g., for URL input, Instacart interactions). Add visual indicators (e.g., spinners) to individual recipe card loading states (`renderSingleRecipeResult`).
+    *   **[X] 3. Refine Pantry Checkbox Area:** Style the helper text (`text-xs`, `text-gray-500`) and apply consistent Tailwind styling to the master pantry checkbox.
+    *   **[X] 4. Final Consistency Pass:** Review all sections for minor inconsistencies in padding, margins, font sizes, alignment, etc.
 *   **[ ] Cleanup:** Remove any existing custom CSS rules that are replaced by Tailwind utilities.
 *   **[ ] Testing:** Verify the appearance and responsiveness across different screen sizes (basic check).
 
@@ -322,7 +322,7 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
     *   Cleanup old `/api/process-text` endpoint and `fetchWithRetry`.
     *   Test the new flow thoroughly.
 2.  **Review & Refine Backend Unit Normalization (P0/P1):** Address herb/wine/other specific normalization issues in `/api/create-list`.
-3.  **Implement Individual Timeout Handling (P0 Required UX):** Modify frontend to allow dismissing/retrying single timed-out recipe cards.
+3. **Implement Individual Timeout Handling (P0 Required UX):** Modify frontend to allow dismissing/retrying single timed-out recipe cards.
 4.  **Polish UI/UX (P1):** Simplify pantry text, refine layout. Deploy & Test.
 5.  **Final Demo Run-through.**
 6.  **Refactor Backend Codebase (P1):** Execute the modularization plan.
