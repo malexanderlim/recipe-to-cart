@@ -12,50 +12,49 @@ const receiver = new Receiver({
 });
 
 router.post('/',
-    // IMPORTANT: Still use express.raw() to get the body as a Buffer
-    express.raw({ type: 'application/json' }), 
-    async (req, res, next) => { // Middleware to perform verification
+    // REMOVE express.raw() - Assume body is already parsed by Vercel/Express default
+    async (req, res, next) => { 
         try {
-            console.log('[QStash Verify - Receiver] Verifying QStash signature...');
+            console.log('[QStash Verify - Receiver v2] Verifying QStash signature...');
             const signature = req.headers['upstash-signature'];
             if (!signature) {
-                console.error('[QStash Verify - Receiver] Missing Upstash-Signature header.');
+                console.error('[QStash Verify - Receiver v2] Missing Upstash-Signature header.');
                 return res.status(401).send('Unauthorized: Missing Signature');
             }
             
-            console.log('[QStash Verify - Receiver] Signature Header:', signature);
-            console.log('[QStash Verify - Receiver] Raw Body as String:', req.body.toString('utf-8'));
+            // Log the type and content of req.body as received
+            console.log('[QStash Verify - Receiver v2] Type of req.body received:', typeof req.body);
+            console.log('[QStash Verify - Receiver v2] Value of req.body received:', req.body);
+
+            // Re-stringify the already parsed body for verification
+            let bodyAsString;
+            try {
+                 bodyAsString = JSON.stringify(req.body);
+                 console.log('[QStash Verify - Receiver v2] Body re-serialized for verification:', bodyAsString);
+            } catch (stringifyError) {
+                console.error('[QStash Verify - Receiver v2] Failed to re-stringify req.body:', stringifyError);
+                 return res.status(400).send('Bad Request: Could not process request body.');
+            }
             
-            // req.body should be a Buffer here thanks to express.raw()
             const isValid = await receiver.verify({
                 signature: signature,
-                body: req.body, // Pass the raw buffer body
-                // Optional: Provide the full URL for extra verification against 'url' claim in JWT
-                // url: `${req.protocol}://${req.get('host')}${req.originalUrl}` 
+                body: bodyAsString, // Use the re-serialized string
             });
 
             if (isValid) {
-                console.log('[QStash Verify - Receiver] Signature verified successfully.');
-                // If valid, parse the JSON body *manually* before passing to the controller
-                try {
-                     // Ensure req.body is treated as utf-8 string before parsing
-                     req.body = JSON.parse(req.body.toString('utf-8'));
-                     next(); // Proceed to the controller
-                 } catch (parseError) {
-                     console.error('[QStash Verify - Receiver] Failed to parse JSON body after verification:', parseError);
-                     return res.status(400).send('Bad Request: Invalid JSON body');
-                 }
+                console.log('[QStash Verify - Receiver v2] Signature verified successfully.');
+                // No need to parse again, req.body is already an object
+                next(); 
             } else {
-                console.error('[QStash Verify - Receiver] Invalid signature detected.');
+                console.error('[QStash Verify - Receiver v2] Invalid signature detected.');
                 res.status(401).send('Unauthorized: Invalid Signature');
             }
         } catch (error) {
-            // Log the specific error from receiver.verify if it throws
-            console.error('[QStash Verify - Receiver] Error during verification:', error);
+            console.error('[QStash Verify - Receiver v2] Error during verification:', error);
             res.status(500).send('Internal Server Error during signature verification');
         }
     },
-    processTextWorkerController.handleProcessText // Actual controller logic
+    processTextWorkerController.handleProcessText 
 );
 
 module.exports = router; 
