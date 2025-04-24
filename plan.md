@@ -389,7 +389,6 @@ These improve the experience but are secondary to core functionality and feedbac
         *   **Server Start (`app.listen`):**
             *   `[X]` (`server.js`) - Stays in main server file.
 
-
 ## P2: Future Enhancements
 
 Valuable but not essential for the demo.
