@@ -524,16 +524,37 @@ document.addEventListener('DOMContentLoaded', () => {
             checkbox.type = 'checkbox';
             checkbox.id = `review-ingredient-${index}`;
             checkbox.checked = true; 
-            // Store the full item data as JSON string for reconstruction
             checkbox.dataset.itemData = JSON.stringify(item); 
             
-            // --- Display Primary Measurement --- 
+            // --- Display Primary Measurement (with fixes) --- 
             let displayText = 'Error: No measurement found';
+            let primaryMeasurement = null;
+
             if (item.line_item_measurements && item.line_item_measurements.length > 0) {
-                const primaryMeasurement = item.line_item_measurements[0]; // Assume first is primary
-                displayText = ` ${primaryMeasurement.quantity} ${primaryMeasurement.unit || ''} ${item.name}`.replace(/\s+/g, ' ').trim();
+                // **FIX 1: Prioritize 'each' (head) for garlic display**
+                if (item.name === 'garlic') {
+                    primaryMeasurement = item.line_item_measurements.find(m => m.unit === 'each' || m.unit === 'head');
+                }
+                // If not garlic or 'each' not found for garlic, use the first measurement
+                if (!primaryMeasurement) {
+                    primaryMeasurement = item.line_item_measurements[0]; 
+                }
+
+                // **FIX 2: Avoid duplicating name if unit contains it**
+                const quantityStr = primaryMeasurement.quantity;
+                const unitStr = primaryMeasurement.unit || '';
+                const nameStr = item.name || '';
+
+                // Simple check: if unit string already includes the name string (case-insensitive), don't append name
+                if (unitStr.toLowerCase().includes(nameStr.toLowerCase())) {
+                    displayText = `${quantityStr} ${unitStr}`.trim();
+                } else {
+                    displayText = `${quantityStr} ${unitStr} ${nameStr}`.replace(/\s+/g, ' ').trim();
+                }
+                
             } else {
-                displayText = ` ${item.name} (Check units/quantity)`; // Fallback
+                // Fallback if no measurements
+                displayText = ` ${item.name} (Check units/quantity)`; 
             }
             // ----------------------------------
 
