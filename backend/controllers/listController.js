@@ -294,13 +294,20 @@ async function createList(req, res) {
         const ingredientsWithNorm = rawIngredients.map(rawItem => {
              const originalRawString = rawItem.ingredient?.trim() || '';
              const llmMatch = llmResultMap.get(originalRawString);
-             
-             let normalized_name = simpleNormalize(originalRawString); // Fallback
+
+             // Use LLM's normalization primarily, fallback to cleaned original string if LLM fails
+             let normalized_name = llmMatch?.normalized_name;
+             if (!normalized_name) {
+                 normalized_name = originalRawString.toLowerCase().trim(); // Cleaned fallback
+                 if (originalRawString) { // Don't log for completely empty raw strings
+                    console.warn(`V8: LLM normalization failed for "${originalRawString}". Falling back to cleaned raw string: "${normalized_name}"`);
+                 }
+             }
+
              let parsed_quantity = rawItem.quantity; // Use original quantity by default
              let parsed_unit = rawItem.unit; // Use original unit by default
-             
+
              if (llmMatch) {
-                 normalized_name = llmMatch.normalized_name; // Prefer LLM normalization
                  // Optionally use LLM parsed qty/unit if they seem valid
                  if (llmMatch.quantity !== null && typeof llmMatch.quantity === 'number') {
                      parsed_quantity = llmMatch.quantity;
@@ -309,8 +316,8 @@ async function createList(req, res) {
                      parsed_unit = llmMatch.unit;
                  }
                  // Add a flag indicating source for debugging?
-             }
-             
+             } // No 'else' needed, fallback already handled above
+
              return {
                  ...rawItem, // Keep original data
                  ingredient: originalRawString, // Ensure it's the trimmed original string
