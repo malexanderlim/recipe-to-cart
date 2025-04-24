@@ -39,3 +39,11 @@ This document outlines key rules and best practices to follow during development
     *   **Problem:** Creating new modules, services, or functions without checking if similar functionality already exists leads to code duplication, increased maintenance burden, and potential inconsistencies.
     *   **Rule:** Before implementing new functionality (especially helper functions, service interactions, or utility logic), **thoroughly search the codebase** (using file search, semantic search, or directory exploration) to identify existing modules, services, or functions that might already provide the needed capability or can be extended. Favor using or adapting existing code over creating duplicates.
     *   **Verification:** Document the search process briefly in thoughts or comments if necessary. Ensure imports point to existing, relevant modules rather than newly created, potentially redundant ones. 
+
+9.  **Raw Body Handling for Verification:**
+    *   **Problem:** Libraries performing request verification (e.g., signature checks for webhooks/queues) often require the **raw, unparsed request body** string or buffer to correctly calculate hashes. Standard body-parsing middleware (like `express.json()` or implicit parsing by frameworks/platforms) can run *before* the verification logic, providing a parsed object instead of the raw body, leading to verification failures.
+    *   **Rule:** When implementing request verification that needs the raw body:
+        *   Ensure any necessary middleware (like `@upstash/qstash`'s `Receiver` or Stripe's webhook handler) receives the request body in the format it expects (typically raw string or buffer).
+        *   Be aware of default body parsers. Explicitly configure middleware (like `express.raw()`) to capture the raw body *if* it's guaranteed to run before any default parsing.
+        *   If the body is unavoidably parsed before verification, check if the library supports verifying against a re-serialized string (e.g., `JSON.stringify(parsedBody)`), ensuring the serialization matches the original format precisely.
+    *   **Verification:** Log the `typeof` and the actual value of the request body *immediately before* it's passed to the verification function to confirm it's in the expected raw format or to understand how it needs to be handled (e.g., re-serialized). 

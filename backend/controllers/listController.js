@@ -574,55 +574,73 @@ async function createList(req, res) {
             if (normalizedName === 'garlic') {
                 console.log(`  V7 Adjusting Garlic Measurements: Before: ${JSON.stringify(finalMeasurements)}`);
                 
-                // ** FIX: Consolidate cloves to heads if both exist due to conversion failure **
+                // ** FIX V2: Consolidate cloves to heads *before* filtering **
                 const cloveMeasurement = finalMeasurements.find(m => m.unit === 'clove');
-                let headMeasurement = finalMeasurements.find(m => m.unit === 'each' || m.unit === 'head');
+                let headMeasurement = finalMeasurements.find(m => m.unit === 'each' || m.unit === 'head'); // Allow 'each' initially
                 
-                if (cloveMeasurement && cloveMeasurement.quantity > 0) {
-                    const headsFromCloves = Math.ceil(cloveMeasurement.quantity / 11); // Approx. 10-12 cloves/head
-                    console.log(`    Garlic: Found ${cloveMeasurement.quantity} cloves. Converting to ${headsFromCloves} heads.`);
-                    if (headMeasurement) {
-                        headMeasurement.quantity += headsFromCloves;
-                        console.log(`    Garlic: Added to existing heads. New total: ${headMeasurement.quantity}`);
-                    } else {
-                        // If no head measurement existed yet, create one
-                        headMeasurement = { unit: 'head', quantity: headsFromCloves };
-                        finalMeasurements.push(headMeasurement);
-                        console.log(`    Garlic: Created new head measurement: ${headMeasurement.quantity}`);
-                    }
-                    // Ensure head unit is canonical 'head' not 'each' after potential creation
-                    headMeasurement.unit = 'head'; 
+                let currentHeadCount = headMeasurement ? headMeasurement.quantity : 0;
+                let currentCloveCount = cloveMeasurement ? cloveMeasurement.quantity : 0;
+                let totalCalculatedHeads = currentHeadCount;
+
+                if (currentCloveCount > 0) {
+                    const headsFromCloves = Math.ceil(currentCloveCount / 11); // Use hardcoded factor 11
+                    console.log(`    Garlic: Consolidating ${currentCloveCount} cloves into ${headsFromCloves} heads.`);
+                    totalCalculatedHeads += headsFromCloves;
                 }
-                // Remove clove measurement after potential consolidation
+
+                // Create or update the 'head' measurement with the total count
+                if (totalCalculatedHeads > 0) {
+                     if (headMeasurement) {
+                         headMeasurement.quantity = totalCalculatedHeads;
+                         headMeasurement.unit = 'head'; // Ensure canonical unit
+                         console.log(`    Garlic: Updated head count to ${totalCalculatedHeads}`);
+                     } else {
+                         // Add new head measurement if none existed
+                         headMeasurement = { unit: 'head', quantity: totalCalculatedHeads };
+                         finalMeasurements.push(headMeasurement);
+                         console.log(`    Garlic: Added head measurement with count ${totalCalculatedHeads}`);
+                     }
+                } else if (headMeasurement) {
+                    // If cloves were 0 and heads existed, ensure unit is 'head'
+                    headMeasurement.unit = 'head';
+                }
+                
+                // Remove clove measurement definitively
                 finalMeasurements = finalMeasurements.filter(m => m.unit !== 'clove');
+                // ** END FIX V2 **
+                
                 // Refresh headMeasurement reference after potential push/filter
                 headMeasurement = finalMeasurements.find(m => m.unit === 'head'); 
-                // ** END FIX **
                 
-                // Existing logic to ensure 'lb' and 'head' (previously 'each') are present
+                // Ensure 'lb' and 'head' units are present using the *consolidated* head count
                 let hasHead = headMeasurement != null;
                 let hasLb = finalMeasurements.some(m => m.unit === 'lb');
                 
-                // 1. Ensure 'head' is present (redundant now due to fix above, but safe check)
-                if (!hasHead) {
-                     finalMeasurements.push({ unit: 'head', quantity: 1 }); // Fallback to 1 head
+                // 1. Ensure 'head' is present (Should be true now, but keep as safety)
+                if (!hasHead && totalCalculatedHeads <= 0) { // Only add fallback if calculation resulted in zero
+                     finalMeasurements.push({ unit: 'head', quantity: 1 }); 
                      headMeasurement = finalMeasurements.find(m => m.unit === 'head');
-                     console.log("    Garlic: Added fallback 'head' unit.");
+                     console.log("    Garlic: Added fallback 'head' unit (1)." );
+                } else if (!hasHead && totalCalculatedHeads > 0) {
+                     // This case should ideally not happen after the fix, but if it does, add the calculated value
+                     headMeasurement = { unit: 'head', quantity: totalCalculatedHeads };
+                     finalMeasurements.push(headMeasurement);
+                     console.log("    Garlic: Added calculated head unit.");
                 }
 
                 // 2. Ensure 'lb' is present 
                 if (!hasLb) {
                     let poundsToAdd = 0.15; // Default fallback weight
-                    if (headMeasurement && headMeasurement.quantity > 0) { // Use updated head count
-                        poundsToAdd = parseFloat((headMeasurement.quantity * 0.12).toFixed(2)); // Estimate 0.1-0.15 lb/head
-                         console.log(`    Garlic: Adding 'lb' based on ${headMeasurement.quantity} heads -> ${poundsToAdd} lbs`);
+                    // Use the consolidated head count for lb calculation
+                    const finalHeadQuantity = headMeasurement ? headMeasurement.quantity : 0;
+                    if (finalHeadQuantity > 0) { 
+                        poundsToAdd = parseFloat((finalHeadQuantity * 0.12).toFixed(2)); 
+                         console.log(`    Garlic: Adding 'lb' based on ${finalHeadQuantity} heads -> ${poundsToAdd} lbs`);
                     } 
-                    // Removed clove fallback for lb calculation as cloves are handled above
-                    finalMeasurements.push({ unit: 'lb', quantity: Math.max(0.05, poundsToAdd) }); // Ensure minimum weight
+                    finalMeasurements.push({ unit: 'lb', quantity: Math.max(0.05, poundsToAdd) }); 
                 }
 
-                // 3. Remove 'clove' unit (Done earlier in the fix)
-                // finalMeasurements = finalMeasurements.filter(m => m.unit !== 'clove');
+                // 3. Remove 'clove' unit (Done earlier)
                 
                 // 4. Re-sort: 'head' first, then 'lb', then alpha
                 finalMeasurements.sort((a, b) => {

@@ -540,14 +540,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     primaryMeasurement = item.line_item_measurements[0]; 
                 }
 
-                // **FIX 2: Avoid duplicating name if unit contains it**
+                // **FIX 2: Avoid duplicating name if unit contains it (Revised)**
                 const quantityStr = primaryMeasurement.quantity;
                 const unitStr = primaryMeasurement.unit || '';
                 const nameStr = item.name || '';
 
-                // Simple check: if unit string already includes the name string (case-insensitive), don't append name
-                if (unitStr.toLowerCase().includes(nameStr.toLowerCase())) {
+                // Stricter Check V2: Check if unit string *ends with* the name string, ignoring case.
+                // This handles "fresh thyme sprigs" vs "thyme" better than includes().
+                const unitLower = unitStr.toLowerCase();
+                const nameLower = nameStr.toLowerCase();
+                // Also check if unit is just the plural of name (e.g. unit='bay leaves', name='bay leaf')
+                const isPluralOfName = unitLower.endsWith('s') && unitLower.slice(0, -1) === nameLower;
+                
+                if (unitLower.endsWith(nameLower) || isPluralOfName) {
                     displayText = `${quantityStr} ${unitStr}`.trim();
+                     // Add console log for debugging this specific case
+                    console.log(`Herb Check: Unit '${unitStr}' contained name '${nameStr}' or was plural. Display: '${displayText}'`);
                 } else {
                     displayText = `${quantityStr} ${unitStr} ${nameStr}`.replace(/\s+/g, ' ').trim();
                 }
