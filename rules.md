@@ -80,3 +80,4 @@ This document outlines key rules and best practices to follow during development
         1. Keep the initial HTML generation simple (e.g., default states).
         2. Place the logic that accesses or modifies these elements *after* the code that inserts the HTML into the DOM (e.g., after `element.innerHTML = ...`).
     *   **Verification:** Review code that dynamically generates HTML and then immediately interacts with it. Ensure the interaction logic runs *after* the HTML is part of the document, especially if the logic relies on elements created in the same dynamic block. 
+    
