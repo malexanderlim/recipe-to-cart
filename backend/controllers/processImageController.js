@@ -134,13 +134,27 @@ async function handleProcessImage(req, res) {
             console.log(`[Process Image Job ${jobId}] Redis updated successfully. Triggering next step via QStash.`);
 
             // --- Trigger the next processing step via QStash ---
-            const qstashUrl = process.env.QSTASH_URL;
+            // const qstashUrl = process.env.QSTASH_URL; // Remove reliance on static Env Var
+            
+            // Dynamically construct the target URL based on the environment
+            let targetWorkerUrl;
+            if (process.env.VERCEL_URL) {
+                targetWorkerUrl = `https://${process.env.VERCEL_URL}/api/process-text-worker`;
+                console.log(`[Process Image Job ${jobId}] Determined target worker URL (Vercel): ${targetWorkerUrl}`);
+            } else {
+                // Fallback for local development
+                targetWorkerUrl = `${req.protocol}://${req.get('host')}/api/process-text-worker`;
+                console.log(`[Process Image Job ${jobId}] Determined target worker URL (Local): ${targetWorkerUrl}`);
+            }
 
-            if (qstashClient && qstashUrl) {
+            // if (qstashClient && qstashUrl) { // Old check
+            if (qstashClient && targetWorkerUrl) { // Check using dynamically constructed URL
                  try {
-                     console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${qstashUrl}`);
+                     // console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${qstashUrl}`); // Old log
+                     console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${targetWorkerUrl}`); // Log the dynamic URL
                      const publishResponse = await qstashClient.publishJSON({
-                         url: qstashUrl,
+                         // url: qstashUrl, // Old static URL
+                         url: targetWorkerUrl, // Use the dynamically constructed URL
                          body: { jobId: jobId },
                          // Optional: Add headers if needed by the worker, e.g., for a secret
                          // headers: { 'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret' }
@@ -166,7 +180,9 @@ async function handleProcessImage(req, res) {
                      return res.status(200).json({ message: `Processing failed for Job ID ${jobId} due to trigger issue, status updated.` });
                  }
             } else {
-                 console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or QSTASH_URL not set. Cannot trigger next step.`);
+                 // console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or QSTASH_URL not set. Cannot trigger next step.`); // Old error
+                 // Updated error message to reflect dynamic URL logic
+                 console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or could not determine target worker URL. Cannot trigger next step.`); 
                  // Update Redis status to 'failed' as we cannot proceed
                  const configFailData = {
                      ...visionCompletedData,
