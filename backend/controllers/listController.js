@@ -206,7 +206,13 @@ async function createList(req, res) {
                 "unit": null
             }
             
-            Focus on accurate normalization. Respond with ONLY the JSON array.
+            Focus on accurate normalization.
+            
+            **CRITICAL FORMATTING RULES:**
+            - Your entire response MUST be a single, valid JSON array.
+            - The response MUST start *exactly* with \`[\` and end *exactly* with \`]\`
+            - Do NOT include any text, explanations, or markdown formatting (like \`\`\`json\`) before or after the JSON array.
+            - Do NOT output a nested array like \`[[...]]\`. Output only a single, flat array \`[...]\`
         `;
 
         const userPrompt = `
@@ -235,9 +241,27 @@ async function createList(req, res) {
                 throw new Error("Could not parse normalization data from AI response."); 
            }
 
-           llmParsedItems = parsedJson;
+           // ** FIX: Handle nested array [[...]] case **
+           if (Array.isArray(parsedJson)) {
+               if (parsedJson.length === 1 && Array.isArray(parsedJson[0])) {
+                   console.log("V8: Detected nested array [[...]], extracting inner array.");
+                   llmParsedItems = parsedJson[0]; // Use the inner array
+               } else {
+                   llmParsedItems = parsedJson; // Use the parsed array directly
+               }
+           } else {
+                // If parseAndCorrectJson somehow returned non-null but also non-array
+                console.error("V8: Parsed LLM response is not an array:", parsedJson);
+                throw new Error("LLM output is not an array.");
+           }
+           // ** END FIX **
            
-           if (!Array.isArray(llmParsedItems)) throw new Error("LLM output is not an array.");
+           if (!Array.isArray(llmParsedItems)) { 
+               // This check might be redundant now but kept as a safety net
+               console.error("V8: Result assigned to llmParsedItems is not an array after potential extraction.");
+               throw new Error("LLM output could not be processed into an array.");
+            }
+            
            if (llmParsedItems.length !== rawIngredients.length) {
                console.warn(`LLM response items (${llmParsedItems.length}) don't match raw input items (${rawIngredients.length}). Proceeding with caution.`);
                // Handle mismatch? For now, log warning.
