@@ -1,13 +1,13 @@
-// backend/controllers/processTextController.js
+// backend/controllers/processTextWorkerController.js
 // ----------------------------------------------------------------------------
-//  FULL "/api/process-text" CONTROLLER – restored from legacy server.js
+//  WORKER CONTROLLER for processing text via QStash Trigger
 // ----------------------------------------------------------------------------
 
 /* Internal services & utils */
 const { redis } = require('../services/redisService');
 const { callAnthropic } = require('../services/anthropicService');
 
-// --- ADDED: Helper for Anthropic retry ---
+// --- Helper for Anthropic retry (Moved from old controller) ---
 async function callAnthropicWithRetry(systemPrompt, userPrompt, jobId, model = 'claude-3-haiku-20240307', maxRetries = 2, delay = 2000) {
     let attempts = 0;
     while (attempts <= maxRetries) {
@@ -19,104 +19,93 @@ async function callAnthropicWithRetry(systemPrompt, userPrompt, jobId, model = '
             return response; // Return successful response
         } catch (error) {
             console.warn(`[AnthropicRetry Job ${jobId}] Attempt ${attempts} failed. Error:`, error);
-            // Check if it's a potentially retryable error (e.g., timeout, 5xx status codes)
-            // Note: Specific error codes depend on the underlying Anthropic client/library behavior
-            const isRetryable = error.status >= 500 || // Server errors
-                               error.code === 'ETIMEDOUT' || // Generic timeout
-                               error.code === 'ECONNRESET'; // Connection reset
+            const isRetryable = error.status >= 500 || error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET';
             
             if (isRetryable && attempts <= maxRetries) {
                 console.log(`[AnthropicRetry Job ${jobId}] Retryable error detected. Retrying in ${delay}ms... (${maxRetries - attempts} retries left)`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             } else {
-                // If not retryable or retries exhausted, re-throw
                 console.error(`[AnthropicRetry Job ${jobId}] Not retrying or retries exhausted. Throwing error.`);
                 throw error;
             }
         }
     }
-    // Should not be reached if maxRetries >= 0
     throw new Error(`[AnthropicRetry Job ${jobId}] Exceeded max retries (${maxRetries}) without success calling Anthropic.`);
 }
 // --- END Helper ---
 
 /**
- * Process text extracted from images by Google Vision (Stage 1 - Initial Extraction)
- * Called as background worker by /api/process-image
+ * Process text extracted from images (triggered by QStash)
+ * This function assumes the request has already been verified by QStash middleware.
  */
-async function processText(req, res) {
-    console.log(`---> /api/process-text FUNCTION ENTRY <---`);
-    console.log(`[Process Text Handler] ===== FUNCTION HANDLER ENTERED =====`);
-    const { jobId } = req.body;
+async function handleProcessText(req, res) {
+    console.log(`---> /api/process-text-worker FUNCTION ENTRY <---`); // Updated log
+    const { jobId } = req.body; // Job ID comes from QStash message body
+    
     if (!jobId) {
-        console.error('[Process Text] Received request without Job ID.');
-        return res.status(400).json({ error: 'Missing Job ID.' });
+        console.error('[Process Text Worker] Received QStash message without Job ID in body.');
+        // QStash expects a 2xx response to signal success, or non-2xx/timeout for retry.
+        // Sending 400 will cause QStash to retry, which might not be desired here.
+        // Sending 200 but logging the error is safer to prevent infinite retries for bad messages.
+        return res.status(200).json({ error: 'Missing Job ID in request body.' }); 
     }
 
-    // Security Check
-    const receivedTriggerSecret = req.headers['x-internal-trigger-secret'];
-    const expectedSecret = process.env.INTERNAL_TRIGGER_SECRET || 'default-secret';
-    console.log(`[Process Text Job ${jobId}] Received Trigger Secret (masked): ...${receivedTriggerSecret ? receivedTriggerSecret.slice(-4) : 'MISSING'}`);
-    if (receivedTriggerSecret !== expectedSecret) {
-        console.warn(`[Process Text Job ${jobId}] Invalid or missing trigger secret.`);
-        return res.status(403).json({ error: 'Forbidden' });
-    }
-
-    console.log(`[Process Text Job ${jobId}] Starting text processing (Anthropic Stage 1)...`);
+    console.log(`[Process Text Worker Job ${jobId}] Starting text processing (Anthropic Stage 1)...`);
     let jobData;
     try {
         // --- Retrieve Job Details (including extractedText) from Redis ---
-        console.log(`[Process Text Job ${jobId}] Fetching job details from Redis...`);
+        console.log(`[Process Text Worker Job ${jobId}] Fetching job details from Redis...`);
         if (!redis) { throw new Error('Redis client not initialized'); }
         jobData = await redis.get(jobId);
         if (!jobData) {
-            console.warn(`[Process Text Job ${jobId}] Job data not found in Redis. Aborting.`);
+            console.warn(`[Process Text Worker Job ${jobId}] Job data not found in Redis. Aborting task.`);
+            // Acknowledge QStash message, job state is handled by timeout/frontend logic.
             return res.status(200).json({ message: `Job data not found for ${jobId}, likely expired or invalid.` });
         }
 
         if (jobData.status !== 'vision_completed') {
-            console.warn(`[Process Text Job ${jobId}] Job status is '${jobData.status}', not 'vision_completed'. Skipping text processing.`);
+            console.warn(`[Process Text Worker Job ${jobId}] Job status is '${jobData.status}', not 'vision_completed'. Skipping text processing.`);
+            // Acknowledge QStash message, job is already processed or in an unexpected state.
             return res.status(200).json({ message: `Job status (${jobData.status}) prevents text processing.` });
         }
 
-        const { extractedText, originalFilename } = jobData; // Get extracted text
+        const { extractedText, originalFilename } = jobData; 
         if (!extractedText || extractedText.trim().length === 0) {
-            console.warn(`[Process Text Job ${jobId}] No extracted text found in job data. Cannot proceed.`);
-            // Should not happen if vision_completed status is set correctly, but handle defensively
+            console.warn(`[Process Text Worker Job ${jobId}] No extracted text found in job data. Cannot proceed.`);
             const failedData = { ...jobData, status: 'failed', error: 'Could not find text data passed from the previous step.', finishedAt: Date.now() };
             await redis.set(jobId, JSON.stringify(failedData));
+            // Acknowledge QStash, status updated.
             return res.status(200).json({ message: 'No text to process.'});
         }
-        console.log(`[Process Text Job ${jobId}] Retrieved extracted text. Length: ${extractedText.length}`);
+        console.log(`[Process Text Worker Job ${jobId}] Retrieved extracted text. Length: ${extractedText.length}`);
         // -------------------------------------------------------------
 
         // --- Anthropic API Call (Stage 1 - Initial Extraction) ---
-        console.log(`[Process Text Job ${jobId}] Sending extracted text to Anthropic...`);
+        console.log(`[Process Text Worker Job ${jobId}] Sending extracted text to Anthropic...`);
         const systemPromptStage1 = `You are an expert recipe parser. Analyze the following recipe text extracted via OCR and extract key information. Output ONLY a valid JSON object.`;
         const userPromptStage1 = `Recipe Text:\n---\n${extractedText}\n---\n\nFocus ONLY on the main ingredient list section(s) of the text. Extract the recipe title, yield (quantity and unit, e.g., "4 servings", "2 cups"), and a list of ingredients.\nFor each ingredient, provide:\n- quantity: The numerical value (e.g., 0.5, 30, 1). Use null if not specified or implied (like '1 lemon').\n- unit: The unit as written in the text (e.g., 'cup', 'cloves', 'tsp', 'sprigs', 'each', 'lb'). Use null if not specified.\n- ingredient: The name of the ingredient as written, including descriptive words (e.g., 'extra-virgin olive oil', 'garlic cloves, peeled', 'kosher salt'). Do NOT include quantities or units in this field.\n\nOutput ONLY a single valid JSON object with keys "title", "yield" (an object with "quantity" and "unit"), and "ingredients" (an array of objects with "quantity", "unit", "ingredient").`; 
 
         let rawJsonResponse = '';
-        const anthropicStartTime = Date.now(); // Start timer
-        console.log(`[Process Text Job ${jobId}] Calling Anthropic API... (Timestamp: ${anthropicStartTime})`);
+        const anthropicStartTime = Date.now();
+        console.log(`[Process Text Worker Job ${jobId}] Calling Anthropic API... (Timestamp: ${anthropicStartTime})`);
         try {
-            // --- USE RETRY HELPER --- 
             rawJsonResponse = await callAnthropicWithRetry(systemPromptStage1, userPromptStage1, jobId); 
-            const anthropicEndTime = Date.now(); // End timer
-            const anthropicDuration = anthropicEndTime - anthropicStartTime; // Duration includes retries if any
-            console.log(`[Process Text Job ${jobId}] Received response from Anthropic (potentially after retries). Total Duration: ${anthropicDuration}ms. (Timestamp: ${anthropicEndTime})`);
+            const anthropicEndTime = Date.now();
+            const anthropicDuration = anthropicEndTime - anthropicStartTime;
+            console.log(`[Process Text Worker Job ${jobId}] Received response from Anthropic (potentially after retries). Total Duration: ${anthropicDuration}ms. (Timestamp: ${anthropicEndTime})`);
         } catch (anthropicError) {
-            // This catch block now handles errors *after* retries have failed
-            console.error(`[Process Text Job ${jobId}] Anthropic API call failed AFTER retries:`, anthropicError);
+            console.error(`[Process Text Worker Job ${jobId}] Anthropic API call failed AFTER retries:`, anthropicError);
             const failedData = { 
                 ...jobData, 
                 status: 'failed', 
-                error: 'Could not understand ingredients from the text after multiple attempts.', // Updated error message
+                error: 'Could not understand ingredients from the text after multiple attempts.',
                 extractedText: extractedText, 
                 finishedAt: Date.now() 
             };
             await redis.set(jobId, JSON.stringify(failedData));
-            // Re-throw the error to be caught by the main outer catch block which sends the 200 response
-            throw anthropicError; 
+            // Let QStash retry based on its policy by returning a non-2xx status
+            // throw anthropicError; // Option 1: Let original error propagate (might cause retry)
+            return res.status(500).json({ error: 'Anthropic API call failed after retries.' }); // Option 2: Explicit 500 for retry
         }
         // ------------------------------------------------------
 
@@ -128,101 +117,101 @@ async function processText(req, res) {
             if (jsonMatch && jsonMatch[1]) {
                 jsonString = jsonMatch[1].trim();
             } else if (rawJsonResponse.startsWith('{') && rawJsonResponse.endsWith('}')) {
-                console.log(`[Process Text Job ${jobId}] Anthropic response appears to be direct JSON.`);
+                console.log(`[Process Text Worker Job ${jobId}] Anthropic response appears to be direct JSON.`);
             } else {
                 const jsonStartIndex = rawJsonResponse.indexOf('{');
                 const jsonEndIndex = rawJsonResponse.lastIndexOf('}');
                 if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
                     jsonString = rawJsonResponse.substring(jsonStartIndex, jsonEndIndex + 1);
-                    console.log(`[Process Text Job ${jobId}] Extracted potential JSON substring.`);
+                    console.log(`[Process Text Worker Job ${jobId}] Extracted potential JSON substring.`);
                 } else {
                     throw new Error("Response does not contain ```json block or a valid JSON structure.");
                 }
             }
 
             const parsedData = JSON.parse(jsonString);
-            console.log(`[Process Text Job ${jobId}] Successfully parsed ${parsedData.ingredients?.length || 0} ingredients.`);
+            console.log(`[Process Text Worker Job ${jobId}] Successfully parsed ${parsedData.ingredients?.length || 0} ingredients.`);
 
-            finalResult = { // Store the successful result
-                extractedText, // Keep extracted text for context if needed
+            finalResult = { 
+                extractedText,
                 title: parsedData.title,
                 yield: parsedData.yield,
                 ingredients: parsedData.ingredients
             };
 
         } catch (parseError) {
-            console.error(`[Process Text Job ${jobId}] Error parsing Stage 1 JSON response:`, parseError);
-            console.error(`[Process Text Job ${jobId}] Raw Response causing parse error:\n---\n${rawJsonResponse}\n---`);
+            console.error(`[Process Text Worker Job ${jobId}] Error parsing Stage 1 JSON response:`, parseError);
+            console.error(`[Process Text Worker Job ${jobId}] Raw Response causing parse error:\n---\n${rawJsonResponse}\n---`);
             const failedData = {
                 ...jobData,
                 status: 'failed',
                 error: 'Could not organize the extracted ingredients.',
-                rawResponse: rawJsonResponse, // Include raw response for debugging
+                rawResponse: rawJsonResponse, 
                 finishedAt: Date.now()
             };
             await redis.set(jobId, JSON.stringify(failedData));
-            res.status(200).json({ message: 'Processing finished with parsing errors.' });
-            return; // Exit after setting failed status
+            // Respond 500 to potentially trigger QStash retry if parsing is intermittent?
+            // Or 200 if parsing failure is likely permanent for this input?
+            // Let's go with 500 for now, assuming parsing might be fixable or retryable.
+            return res.status(500).json({ message: 'Processing finished with parsing errors.' }); 
         }
         // ---------------------------
 
-        // --- Deduplicate quantity-less ingredients (e.g., salt, pepper) ---
+        // --- Deduplicate quantity-less ingredients ---
         const uniqueIngredients = new Map();
         const deduplicatedIngredients = [];
         if (finalResult.ingredients && Array.isArray(finalResult.ingredients)) {
             finalResult.ingredients.forEach(item => {
                 const key = item.ingredient?.toLowerCase().trim();
-                // Only deduplicate if quantity and unit are null/undefined
                 if (item.quantity == null && item.unit == null && key) {
                     if (!uniqueIngredients.has(key)) {
                         uniqueIngredients.set(key, item);
                         deduplicatedIngredients.push(item);
                     }
                 } else {
-                    deduplicatedIngredients.push(item); // Keep items with quantity/unit
+                    deduplicatedIngredients.push(item);
                 }
             });
-            finalResult.ingredients = deduplicatedIngredients; // Replace with deduplicated list
-            console.log(`[Process Text Job ${jobId}] Deduplicated ingredient list size: ${finalResult.ingredients.length}`);
+            finalResult.ingredients = deduplicatedIngredients;
+            console.log(`[Process Text Worker Job ${jobId}] Deduplicated ingredient list size: ${finalResult.ingredients.length}`);
         }
         // ------------------------------------------------------------------
 
         // --- Update Redis with FINAL Completed Status and Result ---
-        console.log(`[Process Text Job ${jobId}] Text processing successful. Updating Redis status to 'completed'.`);
+        console.log(`[Process Text Worker Job ${jobId}] Text processing successful. Updating Redis status to 'completed'.`);
         const completedData = {
             ...jobData,
             status: 'completed',
-            result: finalResult, // Store the parsed recipe data
+            result: finalResult,
             anthropicFinishedAt: Date.now()
         };
         await redis.set(jobId, JSON.stringify(completedData));
-        console.log(`[Process Text Job ${jobId}] Redis updated successfully with final result.`);
+        console.log(`[Process Text Worker Job ${jobId}] Redis updated successfully with final result.`);
+        console.log(`[Process Text Worker Job ${jobId}] Final Parsed Result:`, JSON.stringify(finalResult, null, 2));
         // ---------------------------------------------------------
 
-        // --- Added Log for Parsed Result ---
-        console.log(`[Process Text Job ${jobId}] Final Parsed Result:`, JSON.stringify(finalResult, null, 2));
-
+        // Signal success to QStash
         res.status(200).json({ message: 'Text processing completed successfully.' });
 
     } catch (error) {
-        console.error(`[Process Text Job ${jobId}] Error during background text processing:`, error);
+        console.error(`[Process Text Worker Job ${jobId}] Error during background text processing:`, error);
         // Ensure Redis is updated to 'failed' if not already done
         if (jobData && jobData.status !== 'failed') {
             try {
                 const updatePayload = { ...jobData, status: 'failed', error: 'An error occurred while analyzing the text.', finishedAt: Date.now() };
                 await redis.set(jobId, JSON.stringify(updatePayload));
-                console.log(`[Process Text Job ${jobId}] Updated Redis status to 'failed' due to processing error.`);
+                console.log(`[Process Text Worker Job ${jobId}] Updated Redis status to 'failed' due to processing error.`);
             } catch (redisError) {
-                console.error(`[Process Text Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' after error:`, redisError);
+                console.error(`[Process Text Worker Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' after error:`, redisError);
             }
         }
-        // Respond with 200 OK even on errors
+        // Respond with 500 to signal failure to QStash and potentially trigger retry
         if (!res.headersSent) {
-            res.status(200).json({ message: `Text processing failed for Job ID ${jobId}, status updated in Redis.` });
+            res.status(500).json({ message: `Text processing failed for Job ID ${jobId}, status updated in Redis.` });
         }
     }
 }
 
 module.exports = {
-    processText
+    handleProcessText
 }; 

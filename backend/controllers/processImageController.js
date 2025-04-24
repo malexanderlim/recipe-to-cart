@@ -1,38 +1,16 @@
 const heicConvert = require('heic-convert');
 const { redis } = require('../services/redisService');
 const { visionClient } = require('../services/googleVisionService');
-// Note: 'fetch' is globally available in recent Node versions, or use 'node-fetch' if needed.
+const { Client } = require("@upstash/qstash"); // Import QStash Client
+
+// Initialize QStash Client
+const qstashClient = process.env.QSTASH_TOKEN ? new Client({ token: process.env.QSTASH_TOKEN }) : null;
+if (!qstashClient) {
+    console.warn("QSTASH_TOKEN environment variable not set. QStash functionality will be disabled.");
+}
 
 // Helper function for retrying fetch
-async function fetchWithRetry(url, options, jobId, maxRetries = 2, delay = 2000) {
-    let attempts = 0;
-    while (attempts <= maxRetries) {
-        attempts++;
-        try {
-            console.log(`[fetchWithRetry Job ${jobId}] Attempt ${attempts} to POST ${url}`);
-            const response = await fetch(url, options);
-            // If fetch itself succeeded (got a response, even if it's 4xx/5xx), return it
-            console.log(`[fetchWithRetry Job ${jobId}] Attempt ${attempts} successful (Status: ${response.status})`);
-            return response; 
-        } catch (error) {
-            console.warn(`[fetchWithRetry Job ${jobId}] Attempt ${attempts} failed. Error:`, error);
-            // Check if it's a potentially retryable error (like connection timeout)
-            // UND_ERR_CONNECT_TIMEOUT is specific to undici (Node's fetch)
-            const isTimeout = error.cause?.code === 'UND_ERR_CONNECT_TIMEOUT'; 
-            
-            if (isTimeout && attempts <= maxRetries) {
-                console.log(`[fetchWithRetry Job ${jobId}] Connection timeout detected. Retrying in ${delay}ms... (${maxRetries - attempts} retries left)`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            } else {
-                // If it's not a timeout or retries exhausted, re-throw the error
-                console.error(`[fetchWithRetry Job ${jobId}] Not retrying or retries exhausted. Throwing error.`);
-                throw error; 
-            }
-        }
-    }
-    // Should not be reached if maxRetries >= 0, but throw just in case
-    throw new Error(`[fetchWithRetry Job ${jobId}] Exceeded max retries (${maxRetries}) without success.`); 
-}
+// Removed fetchWithRetry function as it's replaced by QStash
 
 async function handleProcessImage(req, res) {
     console.log(`[Process Image Handler] ===== FUNCTION HANDLER ENTERED =====`); // Log immediately
@@ -153,49 +131,61 @@ async function handleProcessImage(req, res) {
             };
 
             await redis.set(jobId, JSON.stringify(visionCompletedData));
-            console.log(`[Process Image Job ${jobId}] Redis updated successfully. Triggering /api/process-text.`);
+            console.log(`[Process Image Job ${jobId}] Redis updated successfully. Triggering next step via QStash.`);
 
-            // Asynchronously trigger the next processing function (/api/process-text)
-            const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `${req.protocol}://${req.get('host')}`;
-            const processTextUrl = `${baseUrl}/api/process-text`;
-            const triggerSecretToSend = process.env.INTERNAL_TRIGGER_SECRET || 'default-secret';
-            const fetchOptions = {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Internal-Trigger-Secret': triggerSecretToSend
-                },
-                body: JSON.stringify({ jobId: jobId })
-            };
-            
-            // --- Use fetchWithRetry --- 
-            fetchWithRetry(processTextUrl, fetchOptions, jobId)
-                .then(response => {
-                    // Log response status, even if it's fire-and-forget, for debugging
-                    if (response) { // Check if response exists (fetch succeeded)
-                         console.log(`[Process Image Job ${jobId}] Trigger call to /api/process-text acknowledged with status: ${response.status}`);
-                    }
-                })
-                .catch(async (fetchTriggerError) => {
-                    // This catch block now handles errors *after* retries have failed
-                    console.error(`[Process Image Job ${jobId}] CRITICAL: fetch() call to /api/process-text failed AFTER retries. Error:`, fetchTriggerError);
-                    const triggerFailData = {
-                        ...visionCompletedData, // Use the data we were about to store before triggering
-                        status: 'failed',
-                        error: 'Processing Error: Failed to start the final analysis step after multiple attempts.', // Updated error message
-                        finishedAt: Date.now()
-                    };
-                    try {
-                        console.log(`[Process Image Job ${jobId}] Attempting to update Redis to 'failed' due to trigger error...`);
-                        await redis.set(jobId, JSON.stringify(triggerFailData));
-                        console.log(`[Process Image Job ${jobId}] Successfully updated Redis status to 'failed' after trigger error.`);
-                    } catch (redisSetError) {
-                         console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' AFTER the /api/process-text trigger failed! Error:`, redisSetError);
-                    }
-                });
-            // --- End fetchWithRetry usage ---
+            // --- Trigger the next processing step via QStash ---
+            const qstashWorkerUrl = process.env.QSTASH_WORKER_URL;
 
-            res.status(200).json({ message: 'Processing completed successfully.' });
+            if (qstashClient && qstashWorkerUrl) {
+                 try {
+                     console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${qstashWorkerUrl}`);
+                     const publishResponse = await qstashClient.publishJSON({
+                         url: qstashWorkerUrl,
+                         body: { jobId: jobId },
+                         // Optional: Add headers if needed by the worker, e.g., for a secret
+                         // headers: { 'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret' }
+                     });
+                     console.log(`[Process Image Job ${jobId}] Successfully published job to QStash. Message ID: ${publishResponse.messageId}`);
+                 } catch (qstashError) {
+                     console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to publish job to QStash. Error:`, qstashError);
+                     // Update Redis status to 'failed' as the trigger failed
+                     const triggerFailData = {
+                         ...visionCompletedData, // Use the data we just stored
+                         status: 'failed',
+                         error: 'Processing Error: Failed to trigger the analysis step via QStash.',
+                         finishedAt: Date.now()
+                     };
+                     try {
+                         console.log(`[Process Image Job ${jobId}] Attempting to update Redis to 'failed' due to QStash publish error...`);
+                         await redis.set(jobId, JSON.stringify(triggerFailData));
+                         console.log(`[Process Image Job ${jobId}] Successfully updated Redis status to 'failed' after QStash error.`);
+                     } catch (redisSetError) {
+                          console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' AFTER QStash publish failed! Error:`, redisSetError);
+                     }
+                     // Respond 200 but log the internal error (job state handled in Redis)
+                     return res.status(200).json({ message: `Processing failed for Job ID ${jobId} due to trigger issue, status updated.` });
+                 }
+            } else {
+                 console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or QSTASH_WORKER_URL not set. Cannot trigger next step.`);
+                 // Update Redis status to 'failed' as we cannot proceed
+                 const configFailData = {
+                     ...visionCompletedData,
+                     status: 'failed',
+                     error: 'Processing Error: QStash configuration missing, cannot trigger analysis.',
+                     finishedAt: Date.now()
+                 };
+                 // Similar error handling as above for Redis update failure
+                 try {
+                     await redis.set(jobId, JSON.stringify(configFailData));
+                 } catch (redisSetError) {
+                     console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' AFTER QStash config error! Error:`, redisSetError);
+                 }
+                 return res.status(200).json({ message: `Processing failed for Job ID ${jobId} due to configuration issue.` });
+            }
+            // --- End QStash Trigger ---
+
+            // If publish was successful (or if QStash is disabled but we didn't hard-fail)
+            res.status(200).json({ message: 'Vision processing completed, analysis step triggered.' }); // Updated success message
             return; // Exit successfully
         } else {
             console.log(`[Process Image Job ${jobId}] No text extracted by Vision API.`);

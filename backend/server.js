@@ -21,7 +21,8 @@ const upload = multer({ storage: storage });
 // --- Route Imports ---
 const uploadRoutes = require('./routes/uploadRoutes');
 const processImageRoutes = require('./routes/processImageRoutes');
-const processTextRoutes = require('./routes/processTextRoutes');
+// const processTextRoutes = require('./routes/processTextRoutes'); // Remove old route
+const processTextWorkerRoutes = require('./routes/processTextWorkerRoutes'); // Import new worker route
 const urlRoutes = require('./routes/urlRoutes');
 const urlJobRoutes = require('./routes/urlJobRoutes');
 const jobStatusRoutes = require('./routes/jobStatusRoutes');
@@ -32,7 +33,8 @@ const instacartRoutes = require('./routes/instacartRoutes');
 // Apply the upload middleware specifically to the upload route
 app.use('/api/upload', uploadRoutes);
 app.use('/api/process-image', processImageRoutes);
-app.use('/api/process-text', processTextRoutes);
+// app.use('/api/process-text', processTextRoutes); // Remove old route mounting
+app.use('/api/process-text-worker', processTextWorkerRoutes); // Mount new worker route
 app.use('/api/process-url', urlRoutes);
 app.use('/api/process-url-job', urlJobRoutes);
 app.use('/api/job-status', jobStatusRoutes);

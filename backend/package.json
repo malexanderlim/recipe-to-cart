@@ -14,6 +14,7 @@
     "@google-cloud/vision": "^5.1.0",
     "@mozilla/readability": "^0.6.0",
     "@upstash/redis": "^1.31.6",
+    "@upstash/qstash": "latest",
     "@vercel/blob": "^1.0.0",
     "@vercel/kv": "^3.0.0",
     "axios": "^1.8.4",
