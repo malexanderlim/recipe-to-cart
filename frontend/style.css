@@ -9,45 +9,105 @@ body {
 h1 {
     text-align: center;
     color: #333;
+    margin-bottom: 10px; /* Reduce space below H1 */
+}
+
+/* --- Intro Text --- */
+.intro-text {
+    /* text-align: center; */ /* Removed centering */
+    color: #555;
+    font-size: 1.05em; /* Slightly smaller */
+    /* max-width: 600px; */ /* No longer needed */
+    margin: 0 0 25px 0; /* Remove auto margins, add bottom margin */
+    padding: 0 10px; /* Add slight horizontal padding */
+    line-height: 1.5;
 }
 
 .container {
     max-width: 1200px;
     margin: 20px auto;
     background: #fff;
-    padding: 30px;
+    padding: 20px 30px 30px 30px; /* Adjust padding slightly */
     border-radius: 8px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.1);
 }
 
-section {
-    margin-bottom: 30px;
-    padding-bottom: 20px;
-    border-bottom: 1px solid #eee;
+/* --- Section Styling --- */
+.step-section {
+    margin-bottom: 40px; /* Increased space between sections */
+    padding: 20px;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    background-color: #ffffff; /* Ensure sections have white background */
 }
 
-section:last-child {
-    border-bottom: none;
+.step-section h2 {
+    margin-top: 0; /* Remove default top margin */
+    padding-bottom: 15px;
+    border-bottom: 1px solid #e0e0e0;
+    margin-bottom: 20px;
 }
 
-h2 {
+/* --- Input Area Styling --- */
+#add-recipes-section .input-method {
+    padding: 15px;
+    border: 1px solid #f0f0f0;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    background-color: #fafafa;
+}
+
+#add-recipes-section .input-method:last-child {
+    margin-bottom: 0;
+}
+
+#add-recipes-section .input-method h3 {
+    margin-top: 0;
     color: #555;
+}
+
+.url-input-container {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.url-input-container input[type="url"] {
+    flex-grow: 1; /* Allow input to take available space */
+    margin-bottom: 0; /* Remove margin from flex item */
+}
+
+.url-input-container button {
+    margin-bottom: 0; /* Remove margin from flex item */
+    flex-shrink: 0; /* Prevent button from shrinking */
+}
+
+/* Helper text styling */
+.helper-text {
+    font-size: 0.9em;
+    color: #777;
+    margin-top: 5px;
     margin-bottom: 15px;
 }
 
-h3 {
+/* Clarification text for choices */
+.clarification-text {
+    font-size: 0.95em;
     color: #666;
-    margin-top: 20px;
-    margin-bottom: 10px;
+    margin-bottom: 20px; /* Space before the first input method */
+    font-style: italic;
 }
 
+/* --- Input Element Styling --- */
 input[type="file"],
 input[type="text"],
+input[type="url"],
 input[type="number"],
 textarea,
 button {
-    display: block;
-    width: calc(100% - 22px); /* Account for padding/border */
+    /* display: block; */ /* Removed, let flex/grid handle layout */
+    width: 100%; /* Default to full width within container */
+    box-sizing: border-box; /* Include padding and border in element's total width and height */
     padding: 10px;
     margin-bottom: 15px;
     border: 1px solid #ccc;
@@ -56,10 +116,12 @@ button {
 }
 
 input[type="file"] {
-     width: auto; /* Don't make file input full width */
+     width: auto; /* Keep file input width automatic */
      border: none;
      padding-left: 0;
+     margin-bottom: 5px; /* Reduce bottom margin */
 }
+
 
 textarea {
     resize: vertical;
@@ -73,8 +135,9 @@ button {
     border: none;
     cursor: pointer;
     transition: background-color 0.3s ease;
-    width: auto; /* Adjust button width */
+    width: auto; /* Buttons adjust to content size */
     padding: 10px 20px;
+    flex-shrink: 0; /* Prevent buttons in flex containers from shrinking */
 }
 
 button:hover {
@@ -86,97 +149,43 @@ button:disabled {
     cursor: not-allowed;
 }
 
+/* --- Image Preview --- */
+#image-preview-area {
+    margin-top: 10px;
+}
+
 #image-preview-area img {
-    max-width: 150px;
-    max-height: 150px;
-    margin: 10px 10px 0 0;
+    max-width: 100px; /* Slightly smaller previews */
+    max-height: 100px;
+    margin: 5px 5px 0 0;
     border: 1px solid #ddd;
     border-radius: 4px;
 }
 
-#parsed-ingredients-list {
-    list-style: disc;
-    padding-left: 20px;
-}
 
-#parsed-ingredients-list li {
-    margin-bottom: 8px;
-}
-
-#servings-control {
-    display: flex; /* Use flexbox for alignment */
-    align-items: center; /* Align items vertically */
-    gap: 10px; /* Add space between elements */
-    margin-top: 15px;
-}
-
-#servings-control label {
-    margin-bottom: 0; /* Remove bottom margin for label */
-}
-
-#servings-control input[type="number"] {
-    width: 60px; /* Smaller width for number input */
-    margin-bottom: 0; /* Remove bottom margin */
-    text-align: center;
-}
-
-#servings-control button {
-    width: 30px; /* Fixed width for +/- buttons */
-    height: 30px;
-    padding: 0; /* Remove padding */
-    font-size: 1.2rem;
-    line-height: 30px; /* Center text vertically */
-    margin-bottom: 0; /* Remove bottom margin */
-}
-
-.error {
-    color: #dc3545;
-    margin-bottom: 10px;
-    font-weight: bold;
-}
-
-#loading-indicator,
-#instacart-loading-indicator {
-    margin: 15px 0;
-    color: #007bff;
-}
-
-#instacart-link-area a {
-    display: inline-block;
-    margin-top: 10px;
-    padding: 10px 15px;
-    background-color: #28a745;
-    color: white;
-    text-decoration: none;
-    border-radius: 4px;
-    transition: background-color 0.3s ease;
-}
-
-#instacart-link-area a:hover {
-    background-color: #218838;
-}
-
-/* Styles for Recipe Cards */
+/* --- Results Section --- */
 #recipe-results-container {
-    display: flex; /* Arrange cards horizontally */
-    flex-wrap: wrap; /* Allow cards to wrap to the next line */
+    display: grid; /* Use Grid for more control */
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); /* Responsive columns */
     gap: 20px; /* Space between cards */
     margin-top: 20px;
+    padding-top: 20px; /* Add space above cards */
 }
 
 .recipe-card {
-    background-color: #f9f9f9;
-    border: 1px solid #eee;
+    background-color: #fdfdfd;
+    border: 1px solid #e8e8e8;
     border-radius: 6px;
     padding: 20px;
-    box-shadow: 0 1px 5px rgba(0,0,0,0.05);
-    flex: 1 1 350px; /* Flex properties: grow, shrink, basis (minimum width) */
-    min-width: 300px; /* Ensure cards don't get too small */
-    margin-bottom: 20px; /* Consistent bottom margin */
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    /* Removed flex properties, Grid handles layout */
+    /* min-width: 300px; */ /* Handled by grid-template-columns */
+    margin-bottom: 0; /* Grid gap handles spacing */
 }
 
 .recipe-card h3 { /* Recipe title */
     margin-top: 0;
+    font-size: 1.2em;
     border-bottom: 1px solid #ddd;
     padding-bottom: 10px;
     margin-bottom: 15px;
@@ -186,29 +195,34 @@ button:disabled {
 .ingredient-list { /* New class for the ul */
     list-style: none; /* Remove default bullets */
     padding-left: 0;
+    margin-bottom: 15px; /* Space below list */
 }
 
 .ingredient-item { /* Class for each li */
     display: flex;
     align-items: center;
     margin-bottom: 8px;
+    padding: 5px 0; /* Add vertical padding */
     cursor: pointer; /* Make it clear the item is interactive */
+    border-bottom: 1px dashed #eee; /* Subtle separator */
+}
+.ingredient-item:last-child {
+    border-bottom: none;
 }
 
 .ingredient-item input[type="checkbox"] {
-    margin-right: 10px;
+    margin-right: 12px; /* Increased space */
     width: auto; /* Override default block styling for inputs */
     margin-bottom: 0; /* Override default */
     cursor: pointer;
-    /* Optional: Make checkbox slightly larger */
-    transform: scale(1.1); 
+    transform: scale(1.2); /* Make checkbox slightly larger */
+    accent-color: #007bff; /* Style the check color */
 }
 
 .ingredient-item label { /* Wrap text in label for better clickability */
     flex-grow: 1;
     user-select: none; /* Prevent text selection on click */
-     /* Inherit cursor from parent */
-    cursor: inherit;
+    cursor: inherit; /* Inherit cursor from parent */
 }
 
 /* Adjust servings control layout within card */
@@ -216,14 +230,18 @@ button:disabled {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-top: 15px;
+    margin-top: 20px; /* Increased space above yield */
     margin-bottom: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #eee;
     flex-wrap: wrap; /* Allow wrapping on smaller cards */
 }
 
 .scale-yield-controls label {
      margin-bottom: 0;
      white-space: nowrap; /* Keep label on one line */
+     font-weight: bold;
+     font-size: 0.95em;
 }
 
 .scale-yield-controls input[type="number"] {
@@ -247,45 +265,109 @@ button:disabled {
     margin-bottom: 0;
 }
 
-/* Update old ID selectors if necessary, these might be superseded by the card structure */
-/* Commenting out old #servings-control styles as we use .scale-yield-controls now */
-/* #servings-control { ... } */
-/* #servings-control label { ... } */
-/* #servings-control input[type="number"] { ... } */
-/* #servings-control button { ... } */
-
-
-/* Adjust list style usage */
-/* Commenting out old #parsed-ingredients-list styles as we use .ingredient-list now */
-/* #parsed-ingredients-list { ... } */
-/* #parsed-ingredients-list li { ... } */
-
-
-/* Existing styles below... */
-
-.error {
-    color: #dc3545;
-    margin-bottom: 10px;
-    font-weight: bold;
+/* --- Action Area --- */
+.action-area {
+    text-align: center;
+    margin-top: 30px; /* Space above button */
+    padding-top: 20px;
+    border-top: 1px solid #eee;
 }
 
-#loading-indicator,
-#instacart-loading-indicator {
-    margin: 15px 0;
+/* --- Loading and Error States --- */
+.loading {
+    text-align: center;
+    padding: 15px;
     color: #007bff;
+    font-style: italic;
 }
 
-#instacart-link-area a {
+.error,
+.error-message {
+    color: #dc3545;
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    padding: 10px 15px;
+    border-radius: 4px;
+    margin: 15px 0;
+    text-align: center;
+}
+
+/* Specific error styling within cards */
+.recipe-card .error-message {
+    margin: 10px 0 0 0; /* Adjust margin inside card */
+    text-align: left;
+}
+
+
+/* --- Final List Section --- */
+#final-list-section {
+    /* Initially hidden, shown by JS */
+}
+
+#review-list-area {
+    margin-bottom: 20px;
+}
+
+/* Placeholder for final list item styling if needed */
+.final-ingredient-item {
+    /* ... */
+}
+
+#instacart-link-area {
+    text-align: center;
+    margin-top: 20px;
+}
+
+#instacart-link-area a,
+#instacart-link-area button {
     display: inline-block;
     margin-top: 10px;
-    padding: 10px 15px;
-    background-color: #28a745;
+    padding: 12px 25px; /* Larger button */
+    background-color: #28a745; /* Green for Instacart */
     color: white;
     text-decoration: none;
     border-radius: 4px;
     transition: background-color 0.3s ease;
+    font-size: 1.1em;
+    border: none;
+    cursor: pointer;
 }
 
-#instacart-link-area a:hover {
+#instacart-link-area a:hover,
+#instacart-link-area button:hover {
     background-color: #218838;
+}
+
+/* --- Responsive Adjustments --- */
+@media (max-width: 600px) {
+    .container {
+        padding: 15px;
+    }
+
+    h1 {
+        font-size: 1.8em;
+    }
+
+    .url-input-container {
+        flex-direction: column; /* Stack URL input and button on small screens */
+        align-items: stretch; /* Make items full width */
+    }
+
+    .url-input-container input[type="url"],
+    .url-input-container button {
+        margin-bottom: 10px; /* Add space when stacked */
+    }
+
+    .url-input-container button {
+        width: 100%; /* Make button full width when stacked */
+    }
+
+    #recipe-results-container {
+        grid-template-columns: 1fr; /* Single column on small screens */
+        gap: 15px;
+    }
+
+    .scale-yield-controls {
+        justify-content: center; /* Center yield controls */
+    }
 } 

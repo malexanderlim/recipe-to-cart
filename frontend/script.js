@@ -23,6 +23,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // const yieldControlDiv = document.getElementById('servings-control'); 
     // ... (other single yield control vars removed)
 
+    // Ensure error message is hidden on load
+    if (errorMessageDiv) {
+        errorMessageDiv.style.display = 'none';
+    }
+    if (instacartErrorMessageDiv) {
+        instacartErrorMessageDiv.style.display = 'none';
+    }
+
     // State for multiple recipes
     let processedRecipes = []; // Array to store data for each recipe: { id, file, title, yield, ingredients, scaleFactor, error }
     let recipeCounter = 0; // Simple ID generator
@@ -477,6 +485,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // *** NEW: Display the returned processed list for review ***
             if (data.processedIngredients && data.originalTitle) {
+                // Make Section 3 visible
+                const finalListSection = document.getElementById('final-list-section');
+                if (finalListSection) {
+                    finalListSection.style.display = 'block';
+                }
+                // Hide the loading indicator for the review button itself
+                setReviewLoadingState(false); 
+                // Display the list
                 displayReviewList(data.processedIngredients, data.originalTitle);
             } else {
                 throw new Error("Backend did not return the processed ingredient list.");
@@ -485,7 +501,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Error getting processed list for review:', error);
             displayReviewError(`Failed to generate list for review: ${error.message}`);
-        } finally {
+            // Ensure loading state is false on error too
             setReviewLoadingState(false);
         }
     }
@@ -494,7 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function displayReviewList(ingredients, originalTitle) {
         if (!reviewListArea) return;
         reviewListArea.innerHTML = ''; // Clear previous content
-        reviewListArea.style.display = 'block'; // Make visible
+        // reviewListArea.style.display = 'block'; // No longer needed here, section is shown before calling
 
         const heading = document.createElement('h2'); // Use H2 for consistency
         // Ensure correct numbering

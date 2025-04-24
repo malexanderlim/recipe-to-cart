@@ -252,6 +252,44 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
 
 ---
 
+## P0: UI/UX Polish for Demo Day
+
+**Goal:** Enhance the visual design and user experience based on feedback for a polished demo. Focus on clarity, flow, and feedback.
+
+**Prioritized Checklist:**
+
+*   **[ ] Layout & Hierarchy: Section Clarity:**
+    *   Clearly differentiate and label "Upload Recipe Image(s)" vs "Paste Recipe URL" inputs.
+    *   Organize content into visually distinct sections with clear headings (e.g., "1. Add Recipes", "2. Review Extracted Ingredients", "3. Final Shopping List").
+    *   Use visual containers (cards/panels) for each extracted recipe result under "Review Extracted Ingredients".
+*   **[ ] Layout & Hierarchy: Prominent Actions:**
+    *   Ensure the "Review Final List" / "Create Instacart List" button is clearly visible and positioned logically at the end of the main workflow sections.
+*   **[ ] Interaction & Feedback: Button Labels & Calls-to-Action:**
+    *   Review all button labels for clarity and action-orientation (e.g., "Add URL" vs. "Process Recipe URL", "Review Final List" vs. "Consolidate & Review").
+*   **[ ] Interaction & Feedback: Processing Feedback:**
+    *   Review and enhance visual feedback during image upload/URL processing (e.g., consistent spinners within cards, clearer status messages beyond just the internal state names).
+*   **[ ] Interaction & Feedback: Success/Error States:**
+    *   Ensure success messages (e.g., "Ingredients extracted!") and error messages are clearly displayed within the context of the specific recipe card/action.
+*   **[ ] Interaction & Feedback: Ingredient Deselection:**
+    *   Verify that the checkboxes for deselecting ingredients in the "Extracted Recipes" section are easily visible and usable.
+*   **[ ] Visual Design: Color Scheme:**
+    *   Define and apply a simple, cohesive color scheme (e.g., primary action color, background/accent colors).
+*   **[ ] Visual Design: Spacing & Padding:**
+    *   Apply consistent padding/margins around sections, cards, and buttons for better visual separation.
+*   **[ ] Visual Design: Typography:**
+    *   Select and apply a clean, readable font pairing for headings and body text.
+*   **[ ] Layout & Hierarchy: Logical Flow:**
+    *   Review the overall step-by-step flow (Upload/URL -> Review -> Final List) to ensure it feels intuitive.
+*   **[ ] Interaction & Feedback: Placeholder Text:**
+    *   Add helpful placeholder text to the URL input field.
+*   **[ ] Responsive Design: Basic Check:**
+    *   Quickly check layout on a simulated mobile viewport to ensure major elements are usable and text is legible.
+*   **[ ] Visual Design: Subtle Enhancements (Lower Priority):**
+    *   Consider adding subtle background textures or gradients if time permits.
+    *   Consider adding simple icons (e.g., upload, URL, checkmark, error) if time permits.
+
+---
+
 Let me know if this revised plan aligns with your vision for crushing Demo Day!
 
 ## Asynchronous Processing Technical Design Document (TDD)
