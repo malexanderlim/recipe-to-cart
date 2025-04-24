@@ -298,6 +298,16 @@ button:disabled {
     text-align: left;
 }
 
+/* Style for inline validation errors (e.g., URL input) */
+.inline-error {
+    background-color: transparent; /* No background */
+    border: none;
+    padding: 5px 0 0 0; /* Padding top only */
+    margin: 0; /* Remove default margin */
+    text-align: left; /* Align left under input */
+    font-size: 0.9em; /* Slightly smaller */
+    color: #dc3545; /* Keep error color */
+}
 
 /* --- Final List Section --- */
 #final-list-section {

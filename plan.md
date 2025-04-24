@@ -105,6 +105,10 @@ These issues directly impact the core value proposition or the demo user experie
     *   **Action:**
         *   **[X] Simplify Pantry Text:** In `frontend/index.html`, changed the label for "I have commonly found pantry items..." to remove the explanatory text.
         *   Add brief, non-intrusive helper text. Examples: Under "Upload": `(Supports JPG, PNG, HEIC)`, Near checkboxes: `Uncheck items you already have`, Near yield: `Adjust servings if needed`.
+*   **[ ] Interaction & Feedback: Input Validation (URL):**
+    *   Add frontend validation to ensure URL input includes `http://` or `https://`.
+    *   Provide clear, immediate feedback if the format is invalid.
+*   **[ ] Improve Specific Error Message (URL Fallback):** Rephrase backend error "Fallback extraction failed..." to be more user-friendly (e.g., "No recipe found at [URL]...").
 
 ## P1: Important for Polish
 
@@ -258,18 +262,22 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
 
 **Prioritized Checklist:**
 
-*   **[ ] Layout & Hierarchy: Section Clarity:**
+*   **[X] Layout & Hierarchy: Section Clarity:**
     *   Clearly differentiate and label "Upload Recipe Image(s)" vs "Paste Recipe URL" inputs.
     *   Organize content into visually distinct sections with clear headings (e.g., "1. Add Recipes", "2. Review Extracted Ingredients", "3. Final Shopping List").
     *   Use visual containers (cards/panels) for each extracted recipe result under "Review Extracted Ingredients".
-*   **[ ] Layout & Hierarchy: Prominent Actions:**
+*   **[X] Layout & Hierarchy: Prominent Actions:**
     *   Ensure the "Review Final List" / "Create Instacart List" button is clearly visible and positioned logically at the end of the main workflow sections.
-*   **[ ] Interaction & Feedback: Button Labels & Calls-to-Action:**
+*   **[X] Interaction & Feedback: Button Labels & Calls-to-Action:**
     *   Review all button labels for clarity and action-orientation (e.g., "Add URL" vs. "Process Recipe URL", "Review Final List" vs. "Consolidate & Review").
+*   **[ ] Interaction & Feedback: Input Validation (URL):**
+    *   Add frontend validation to ensure URL input includes `http://` or `https://`.
+    *   Provide clear, immediate feedback if the format is invalid.
 *   **[ ] Interaction & Feedback: Processing Feedback:**
     *   Review and enhance visual feedback during image upload/URL processing (e.g., consistent spinners within cards, clearer status messages beyond just the internal state names).
 *   **[ ] Interaction & Feedback: Success/Error States:**
     *   Ensure success messages (e.g., "Ingredients extracted!") and error messages are clearly displayed within the context of the specific recipe card/action.
+    *   **[ ] Improve Specific Error Message (URL Fallback):** Rephrase backend error "Fallback extraction failed..." to be more user-friendly (e.g., "No recipe found at [URL]...").
 *   **[ ] Interaction & Feedback: Ingredient Deselection:**
     *   Verify that the checkboxes for deselecting ingredients in the "Extracted Recipes" section are easily visible and usable.
 *   **[ ] Visual Design: Color Scheme:**

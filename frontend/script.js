@@ -227,7 +227,18 @@ document.addEventListener('DOMContentLoaded', () => {
         let ingredientsHTML = `<p>${displayStatus}</p>`; // Use mapped display status
         if (!isLoading) {
             if (recipeData.error) {
-                ingredientsHTML = `<p class="error">${recipeData.error}</p>`; // Use error class
+                let displayError = recipeData.error; // Default to the original error
+                // Check for the specific fallback error
+                if (displayError.includes('Fallback extraction failed: LLM returned no valid ingredients')) {
+                    const urlSnippet = recipeData.inputUrl ? ` at ${recipeData.inputUrl}` : '';
+                    displayError = `No recipe could be identified${urlSnippet}. Please check the URL and try again.`;
+                } else if (displayError.startsWith('Network error:') || displayError.startsWith('Upload Error:')) {
+                     // Keep network/upload errors as is for now, maybe shorten later
+                } else {
+                     // Optional: Prefix other errors for clarity
+                     displayError = `Error: ${displayError}`;
+                }
+                ingredientsHTML = `<p class="error">${displayError}</p>`; // Use error class
             } else if (recipeData.ingredients && recipeData.ingredients.length > 0) { // Check ingredients exist
                 // Render ingredients with checkboxes
                 ingredientsHTML = renderParsedIngredientsHTML(recipeData);
@@ -1160,28 +1171,50 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- URL Processing Logic moved inside DOMContentLoaded ---
     const addUrlButton = document.getElementById('addUrlButton');
     const recipeUrlInput = document.getElementById('recipeUrlInput');
+    const urlErrorMessageDiv = document.getElementById('url-error-message'); // Get the new error div
 
     if (addUrlButton && recipeUrlInput) {
-        addUrlButton.addEventListener('click', () => {
-            console.log('Add URL button clicked!');
+        const handleUrlSubmit = () => {
+            console.log('Attempting URL submit...');
             const url = recipeUrlInput.value.trim();
+            // Clear previous error message
+            if(urlErrorMessageDiv) {
+                urlErrorMessageDiv.textContent = '';
+                urlErrorMessageDiv.style.display = 'none';
+            }
+            
             if (url) {
-                console.log('URL entered:', url);
+                // Validation Check
+                if (!url.toLowerCase().startsWith('http://') && !url.toLowerCase().startsWith('https://')) {
+                    console.log('URL validation failed:', url);
+                    if (urlErrorMessageDiv) {
+                         urlErrorMessageDiv.textContent = 'Please enter a full URL including http:// or https://';
+                         urlErrorMessageDiv.style.display = 'block';
+                    }
+                    return; // Stop processing
+                }
+                
+                console.log('URL is valid, processing:', url);
                 processSingleUrl(url); // Call the function now defined inside
                 recipeUrlInput.value = ''; // Clear input after adding
             } else {
                 console.log('URL input was empty.');
-                alert('Please enter a valid URL.');
+                // Optionally show an error for empty input
+                // if (urlErrorMessageDiv) {
+                //     urlErrorMessageDiv.textContent = 'Please enter a URL.';
+                //     urlErrorMessageDiv.style.display = 'block';
+                // }
             }
-        });
-    }
-    // Add listener for pressing Enter in the URL input
-    if (recipeUrlInput) {
+        };
+
+        addUrlButton.addEventListener('click', handleUrlSubmit);
+
+        // Add listener for pressing Enter in the URL input
         recipeUrlInput.addEventListener('keypress', (event) => {
             if (event.key === 'Enter') {
                 console.log('Enter key pressed in URL input.');
                 event.preventDefault(); // Prevent default form submission if any
-                addUrlButton.click(); // Trigger the button click
+                handleUrlSubmit(); // Use the same handler
             }
         });
     }
