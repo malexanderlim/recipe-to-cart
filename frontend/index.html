@@ -5,64 +5,80 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Recipe to Cart</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="styles/output.css">
+    <script src="https://cdn.jsdelivr.net/npm/validator@13.12.0/validator.min.js"></script>
 </head>
-<body>
-    <h1>Recipe to Cart</h1>
+<body class="bg-gray-100 font-sans text-gray-800">
+    <h1 class="text-3xl font-bold text-center my-6 text-gray-700">Recipe to Cart</h1>
 
-    <div class="container">
-        <p class="intro-text">Turn recipe photos or URLs into shopping lists! Upload an image or paste a link, adjust servings, and we'll build your Instacart cart.</p>
+    <div class="container mx-auto max-w-3xl px-4 py-8">
+        <p class="intro-text mb-8 text-center text-gray-600">Turn recipe photos or URLs into shopping lists! Upload an image or paste a link, adjust servings, and we'll build your Instacart cart.</p>
 
         <!-- Section 1: Add Recipes -->
-        <section id="add-recipes-section" class="step-section">
-            <h2>1. Add Recipes</h2>
-            <p class="clarification-text">Add recipes by uploading images <strong>and/or</strong> pasting URLs below:</p>
+        <section id="add-recipes-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
+            <h2 class="text-2xl font-semibold mb-4 border-b pb-2">1. Add Recipes</h2>
+            <p class="clarification-text text-sm text-gray-600 mb-6">Add recipes by uploading images <strong class="font-semibold">and/or</strong> pasting URLs below:</p>
 
-            <div class="input-method">
-                <h3>Upload Recipe Image(s)</h3>
-                <input type="file" id="recipeImages" accept="image/*,.heic,.heif" multiple>
-                <p class="helper-text">(Supports JPG, PNG, HEIC, etc. Select one or more files.)</p>
-                <div id="image-preview-area"></div> <!-- Previews will appear here -->
+            <div class="input-method mb-6 p-4 border border-gray-200 rounded-md">
+                <h3 class="text-lg font-medium mb-3">Upload Recipe Image(s)</h3>
+                <input type="file" id="recipeImages" accept="image/*,.heic,.heif" multiple class="block w-full text-sm text-gray-500
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-md file:border-0
+                  file:text-sm file:font-semibold
+                  file:bg-blue-50 file:text-blue-700
+                  hover:file:bg-blue-100 mb-2">
+                <p class="helper-text text-xs text-gray-500">(Supports JPG, PNG, HEIC, etc. Select one or more files.)</p>
+                <div id="image-preview-area" class="mt-4"></div> <!-- Previews will appear here -->
             </div>
 
-            <div class="input-method">
-                <h3>Paste Recipe URL</h3>
-                <div class="url-input-container">
-                    <input type="url" id="recipeUrlInput" placeholder="Enter recipe web address (e.g., https://...)">
-                    <button id="addUrlButton">Add URL</button>
+            <div class="input-method p-4 border border-gray-200 rounded-md">
+                <h3 class="text-lg font-medium mb-3">Paste Recipe URL</h3>
+                <div class="url-input-container flex items-center gap-2">
+                    <input type="url" id="recipeUrlInput" placeholder="Enter recipe web address (e.g., https://...)" class="flex-grow px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <button id="addUrlButton" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-md transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Add URL</button>
                 </div>
-                <div id="url-error-message" class="error-message inline-error" style="display: none;"></div> <!-- Placeholder for inline URL errors -->
+                <p id="url-error-message" class="text-red-600 text-sm mt-1" style="display: none;"></p>
             </div>
         </section>
 
         <!-- Section 2: Review Extracted Ingredients -->
-        <section id="results-section" class="step-section">
-            <h2>2. Review Extracted Ingredients</h2>
-            <p class="helper-text">(Adjust yield and uncheck items you already have before reviewing.)</p>
+        <section id="results-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
+            <h2 class="text-2xl font-semibold mb-4 border-b pb-2">2. Review Extracted Ingredients</h2>
+            <p class="helper-text text-sm text-gray-600 mb-4">(Adjust yield and uncheck items you already have before reviewing.)</p>
             <!-- Pantry checkbox added dynamically here -->
             <div id="recipe-results-container">
                 <!-- Recipe result cards will be injected here by script.js -->
+                <div id="empty-state-message" class="text-center text-gray-500 py-10 px-4">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                        <path vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                      </svg>
+                    <h3 class="mt-2 text-sm font-medium text-gray-900">No recipes added</h3>
+                    <p class="mt-1 text-sm text-gray-500">Upload an image or paste a URL above to get started.</p>
+                </div>
             </div>
 
-            <div id="loading-indicator" class="loading" style="display: none;">Processing...</div>
-            <div id="error-message" class="error-message"></div>
+            <div id="loading-indicator" class="loading text-center text-gray-500 py-4" style="display: none;">Processing...</div>
+            <div id="error-message" class="error-message text-red-600 text-center py-4"></div>
 
             <!-- Consolidate Button - Logically leads to the next step -->
-            <div class="action-area">
-                 <button id="create-list-button" disabled>Consolidate & Review Final List</button>
+            <div class="action-area text-center mt-6">
+                 <button id="create-list-button" disabled class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">Review Final List</button>
             </div>
         </section>
 
         <!-- Section 3: Final Shopping List -->
-        <section id="final-list-section" class="step-section" style="display: none;">
-             <h2>3. Final Shopping List</h2>
+        <section id="final-list-section" class="step-section bg-white p-6 rounded-lg shadow-md transition-opacity duration-300 ease-in-out opacity-0" style="display: none;">
+             <h2 class="text-2xl font-semibold mb-4 border-b pb-2">3. Final Shopping List</h2>
              <div id="review-list-area">
                  <!-- Content generated by displayReviewList -->
              </div>
-             <div id="instacart-link-area">
-                <!-- Instacart link/button appears here -->
+             <div id="instacart-feedback" class="mt-4">
+                <div id="instacart-loading-indicator" class="text-gray-600 mt-2" style="display: none;"></div>
+                <div id="instacart-error-message" class="text-red-600 bg-red-50 p-2 rounded-md mt-2" style="display: none;"></div>
+                <div id="instacart-link-area" class="mt-6 text-center">
+                   <!-- Instacart link/button appears here -->
+                </div>
              </div>
-             <div id="instacart-loading-indicator" class="loading" style="display: none;">Sending to Instacart...</div>
-             <div id="instacart-error-message" class="error"></div>
         </section>
     </div>
 

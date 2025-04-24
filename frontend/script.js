@@ -1,5 +1,17 @@
 // Global store for recipe data and status
 let recipeData = {}; // { 'tempId-xyz': { status: 'pending', file: File, jobId: null, error: null, result: null, sourceType: 'file'|'url', inputUrl: null }, ... }
+let processedRecipes = []; // <<< MOVE TO GLOBAL SCOPE >>>
+
+// *** Define helper for empty state visibility ***
+function updateEmptyStateVisibility() {
+    const emptyStateMessage = document.getElementById('empty-state-message');
+    if (emptyStateMessage) {
+        // Check if the recipeData map (for in-progress) OR processedRecipes array (for completed/failed) has items
+        const hasRecipes = Object.keys(recipeData).length > 0 || processedRecipes.length > 0;
+        emptyStateMessage.style.display = hasRecipes ? 'none' : 'block';
+        console.log(`Updating empty state visibility. Has recipes: ${hasRecipes}. Display: ${emptyStateMessage.style.display}`);
+    }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     const imageUploadInput = document.getElementById('recipeImages');
@@ -32,7 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // State for multiple recipes
-    let processedRecipes = []; // Array to store data for each recipe: { id, file, title, yield, ingredients, scaleFactor, error }
     let recipeCounter = 0; // Simple ID generator
 
     // Determine backend URL based on hostname
@@ -76,26 +87,47 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // Remove listeners for single yield controls
 
+    // --- Ensure empty state is correct on load --- 
+    updateEmptyStateVisibility(); // Call the helper on load
+
+    // Updated loading state indicator
+    function setLoadingState(isLoading, fileCount = 0) {
+        if (isLoading) {
+            // *** Modify loading text ***
+            loadingIndicator.textContent = `Processing ${fileCount} file(s)...`; // Keep generic for now, covers initial/add
+            loadingIndicator.style.display = 'block';
+            errorMessageDiv.textContent = ''; // Clear general error message
+            errorMessageDiv.style.display = 'none';
+        } else {
+            loadingIndicator.style.display = 'none';
+        }
+    }
+
     // New handler for multiple files
     async function handleMultipleImageUpload(event) {
         const files = event.target.files;
         if (!files || files.length === 0) return;
 
-        clearAllResults(); // Clear everything before processing new batch
-        setLoadingState(true, files.length); // Indicate loading for multiple files
+        // *** REMOVE clearAllResults() to make uploads additive ***
+        // clearAllResults(); 
 
-        processedRecipes = []; // Reset recipe data store
+        // *** Use the *new* file count for the loading message ***
+        setLoadingState(true, files.length); 
+
+        updateEmptyStateVisibility(); // Hide empty state if it was visible
+
+        // *** REMOVE processedRecipes reset ***
+        // processedRecipes = []; 
 
         for (const file of files) {
-            displayImagePreview(file); // Show preview/filename for current file being processed
+            // displayImagePreview(file); // Preview now handled in renderSingleRecipeResult
             await processSingleFile(file);
+            updateEmptyStateVisibility(); 
         }
-
-        // --- Add createPantryCheckbox() call here, after processing --- 
-        createPantryCheckbox(); 
         
-        setLoadingState(false); // Hide loading indicator when all done
-        updateCreateListButtonState(); // Enable/disable button based on results
+        setLoadingState(false); 
+        updateCreateListButtonState(); 
+        updateEmptyStateVisibility(); 
     }
 
     // Function to process one file
@@ -171,12 +203,21 @@ document.addEventListener('DOMContentLoaded', () => {
             renderSingleRecipeResult(recipeDataObj, false); // isLoading = false to show error
             updateCreateListButtonState(); // Re-evaluate button state after error
         }
-        // REMOVE the old synchronous result handling and re-rendering call here
+        updateEmptyStateVisibility(); // Call helper as recipeData is updated
     }
 
     // Renders the UI block for a single recipe
     // Modified to accept loading message
     function renderSingleRecipeResult(recipeData, isLoading = false, loadingMessage = 'Processing...', internalStatus = null) {
+        
+        // *** Define Spinner SVG at the top ***
+        const spinnerSVG = `
+            <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-700 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+        `;
+
         // --- Status Mapping ---
         let displayStatus = loadingMessage;
         if (isLoading) {
@@ -204,10 +245,39 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!recipeDiv) {
             recipeDiv = document.createElement('div');
             recipeDiv.id = recipeData.id;
-            // Use the new card class
-            recipeDiv.classList.add('recipe-card'); 
+            recipeDiv.classList.add(
+                'recipe-card', 
+                'relative', 
+                'bg-white', 
+                'p-4', 
+                'rounded-lg', 
+                'shadow-md', 
+                'mb-4',
+                'opacity-0', 
+                'transition-opacity', 
+                'duration-300', 
+                'ease-in-out'
+            ); 
             recipeResultsContainer.appendChild(recipeDiv);
+            requestAnimationFrame(() => {
+                recipeDiv.classList.add('opacity-100');
+            });
+        } else {
+            recipeDiv.classList.add('opacity-100');
         }
+
+        // *** Add Remove Button HTML ***
+        const removeButtonHTML = `
+            <button 
+                class="remove-recipe-button absolute top-2 right-2 p-1 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors"
+                data-recipe-id="${recipeData.id}"
+                aria-label="Remove recipe ${recipeData.title || recipeData.id}"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+        `;
 
         // Build HTML structure for yield controls using new classes
         let yieldControlsHTML = '';
@@ -218,16 +288,31 @@ document.addEventListener('DOMContentLoaded', () => {
             // Calculate display value, handle potential NaN
             let currentDisplayValue = Math.round(quantity * scaleFactor);
             if (isNaN(currentDisplayValue)) { currentDisplayValue = quantity; } // Fallback
+            const lowerCaseUnit = unit ? unit.toLowerCase() : ''; // Pre-calculate lowercase unit
 
+            // *** RESTORE CORRECT HTML STRUCTURE ***
             yieldControlsHTML = `
-                <div class="scale-yield-controls"> 
-                    <label for="yield-input-${recipeData.id}">Scale Yield:</label>
-                    <div class="yield-buttons">
-                        <button data-recipe-id="${recipeData.id}" class="yield-decrement" aria-label="Decrease yield">-</button>
-                        <button data-recipe-id="${recipeData.id}" class="yield-increment" aria-label="Increase yield">+</button>
+                <div class="scale-yield-controls mt-2 mb-3"> <!-- Removed outer flex for manual layout -->
+                    <div class="flex items-center flex-wrap gap-2"> <!-- Top row for controls -->
+                        <label for="yield-input-${recipeData.id}" class="text-sm font-medium text-gray-700 whitespace-nowrap">Scale Recipe:</label>
+                        <div class="yield-buttons flex">
+                            <button data-recipe-id="${recipeData.id}" 
+                                    class="yield-decrement bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-2 rounded-l focus:outline-none focus:ring-1 focus:ring-gray-400" 
+                                    aria-label="Decrease yield">
+                                -
+                            </button>
+                            <button data-recipe-id="${recipeData.id}" 
+                                    class="yield-increment bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-2 rounded-r focus:outline-none focus:ring-1 focus:ring-gray-400" 
+                                    aria-label="Increase yield">
+                                +
+                            </button>
+                        </div>
+                        <input type="number" id="yield-input-${recipeData.id}" data-recipe-id="${recipeData.id}" value="${currentDisplayValue}" min="1" step="1" aria-labelledby="yield-label-${recipeData.id}" class="w-14 px-2 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        <span class="yield-unit-label text-sm text-gray-600" id="yield-label-${recipeData.id}">${lowerCaseUnit}</span> <!-- Unit only -->
                     </div>
-                    <input type="number" id="yield-input-${recipeData.id}" data-recipe-id="${recipeData.id}" value="${currentDisplayValue}" min="1" step="1" aria-labelledby="yield-label-${recipeData.id}">
-                    <span class="yield-unit-label" id="yield-label-${recipeData.id}">${unit || ''} (Original: ${quantity})</span>
+                    <div class="text-xs text-gray-500 mt-1 ml-2"> <!-- Bottom row for original yield -->
+                        Original Recipe: ${quantity} ${lowerCaseUnit}
+                    </div>
                 </div>
             `;
         }
@@ -247,9 +332,8 @@ document.addEventListener('DOMContentLoaded', () => {
                      // Optional: Prefix other errors for clarity
                      displayError = `Error: ${displayError}`;
                 }
-                ingredientsHTML = `<p class="error">${displayError}</p>`; // Use error class
-            } else if (recipeData.ingredients && recipeData.ingredients.length > 0) { // Check ingredients exist
-                // Render ingredients with checkboxes
+                ingredientsHTML = `<p class="error text-red-600 p-2 bg-red-50 rounded-md">${displayError}</p>`; // Use error class
+            } else if (recipeData.ingredients && recipeData.ingredients.length > 0) {
                 ingredientsHTML = renderParsedIngredientsHTML(recipeData);
             } else {
                 // Handle case where processing finished but no ingredients found (not an error)
@@ -258,9 +342,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Use h3 for title in card
-        const displayTitle = isLoading ? "Processing Recipe..." : recipeData.title;
+        const displayTitle = isLoading ? `<div class="flex items-center">${spinnerSVG} Processing Recipe...</div>` : recipeData.title;
+        // *** Add removeButtonHTML to the output ***
         recipeDiv.innerHTML = ` 
-            <h3>${displayTitle}</h3>
+            ${removeButtonHTML} 
+            <h3 class="text-lg font-semibold mb-2 pr-8">${displayTitle}</h3> <!-- Add padding-right to avoid overlap -->
             ${yieldControlsHTML}
             ${ingredientsHTML}
         `;
@@ -276,13 +362,33 @@ document.addEventListener('DOMContentLoaded', () => {
         // Add listener to parent UL for checkbox changes (event delegation)
         const ingredientsList = recipeDiv.querySelector('.ingredient-list');
         if (ingredientsList) {
-            // Remove previous listener if any to avoid duplicates on re-render
-            // A more robust approach might involve storing/removing listeners explicitly
             ingredientsList.removeEventListener('change', handleCheckboxChange); 
             ingredientsList.addEventListener('change', handleCheckboxChange);
-            // Add click listener to LI for toggling checkbox via label click
              ingredientsList.removeEventListener('click', handleListItemClick); 
             ingredientsList.addEventListener('click', handleListItemClick);
+
+            // *** NEW: Apply initial pantry check state AFTER rendering ***
+            if (pantryCheckbox && pantryCheckbox.checked) {
+                const checkboxes = ingredientsList.querySelectorAll('input.ingredient-checkbox');
+                checkboxes.forEach(checkbox => {
+                    const index = parseInt(checkbox.dataset.ingredientIndex, 10);
+                    const itemData = recipeData.ingredients[index];
+                    if (itemData && itemData.ingredient) {
+                        const isCommon = commonItemsKeywords.some(keyword => 
+                            (itemData.ingredient || '').toLowerCase().includes(keyword)
+                        );
+                        if (isCommon) {
+                            checkbox.checked = false; // Uncheck if pantry box is checked and item is common
+                            // Update label style if needed
+                            const label = ingredientsList.querySelector(`label[for='${checkbox.id}']`);
+                            if (label) {
+                                label.classList.add('line-through', 'text-gray-400');
+                            }
+                        }
+                    }
+                });
+            }
+            // *** END NEW ***
         }
     }
 
@@ -314,14 +420,17 @@ document.addEventListener('DOMContentLoaded', () => {
         inputElement.value = currentDisplayValue; 
         recipeData.scaleFactor = originalQuantity > 0 ? currentDisplayValue / originalQuantity : 1; 
         
-        // --- FIX: Update ingredient text directly instead of re-rendering --- 
+        // *** RESTORE Ingredient Text Update Logic *** 
         const recipeCard = document.getElementById(recipeId);
-        const ingredientItems = recipeCard?.querySelectorAll('.ingredient-list .ingredient-item'); 
+        const ingredientItems = recipeCard?.querySelectorAll('.ingredients-list li'); 
         
         if (ingredientItems && recipeData.ingredients) {
              const newScaleFactor = recipeData.scaleFactor; // Use the updated scale factor
              ingredientItems.forEach(li => {
-                 const index = parseInt(li.querySelector('input[type="checkbox"]')?.dataset.ingredientIndex, 10);
+                 const checkbox = li.querySelector('input[type="checkbox"]');
+                 if (!checkbox) return; // Skip if checkbox not found
+
+                 const index = parseInt(checkbox.dataset.ingredientIndex, 10);
                  const itemData = recipeData.ingredients[index];
                  const label = li.querySelector('label');
                  
@@ -329,13 +438,19 @@ document.addEventListener('DOMContentLoaded', () => {
                      let displayQuantity = '';
                      if (itemData.quantity !== null && typeof itemData.quantity === 'number') {
                          const scaledValue = itemData.quantity * newScaleFactor;
-                         displayQuantity = scaledValue.toFixed(2);
-                         if (displayQuantity.endsWith('.00')) { 
-                             displayQuantity = displayQuantity.slice(0, -3); // Remove .00
-                         } else if (displayQuantity.includes('.') && displayQuantity.endsWith('0')) {
-                             displayQuantity = displayQuantity.slice(0, -1); // Remove trailing 0 only if there's a decimal
-                         }
-                         displayQuantity = displayQuantity.toString(); 
+                         // Format to max 2 decimal places, removing trailing zeros
+                         displayQuantity = parseFloat(scaledValue.toFixed(2)).toString();
+                         // Original formatting logic (might need refinement for fractions etc.)
+                         // displayQuantity = scaledValue.toFixed(2);
+                         // if (displayQuantity.endsWith('.00')) { 
+                         //     displayQuantity = displayQuantity.slice(0, -3); // Remove .00
+                         // } else if (displayQuantity.includes('.') && displayQuantity.endsWith('0')) {
+                         //     displayQuantity = displayQuantity.slice(0, -1); // Remove trailing 0 only if there's a decimal
+                         // }
+                         // displayQuantity = displayQuantity.toString(); 
+                     } else if (itemData.quantity !== null) {
+                         // Handle non-numeric quantities (just display original)
+                         displayQuantity = itemData.quantity.toString();
                      }
                      const unit = itemData.unit || '';
                      const ingredientName = itemData.ingredient || '';
@@ -344,7 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
                  }
              });
         }
-        // --- End of FIX ---
+        // *** End of RESTORED Logic ***
         
         updateCreateListButtonState(); 
     }
@@ -356,49 +471,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // UPDATED: Returns an HTML string for the ingredients list with checkboxes
     function renderParsedIngredientsHTML(recipeData) {
-        if (!recipeData.ingredients || recipeData.ingredients.length === 0) {
-            return '<p>No ingredients parsed.</p>';
-        }
-        // Ensure scaleFactor is valid
-        const scaleFactor = (typeof recipeData.scaleFactor === 'number' && !isNaN(recipeData.scaleFactor)) ? recipeData.scaleFactor : 1;
+        let html = `<h5 class="text-base font-medium text-gray-600 mb-2">Parsed Ingredients:</h5>`; 
+        html += '<ul class="ingredients-list space-y-1">'; 
+        recipeData.ingredients.forEach((item, index) => {
+            const isChecked = true; // Default to checked in the HTML string
 
-        const listItems = recipeData.ingredients.map((item, index) => {
-            let displayQuantity = '';
-            if (item.quantity !== null && typeof item.quantity === 'number') {
-                const scaledValue = item.quantity * scaleFactor;
-                // Format nicely: Round to 2 decimal places, remove trailing .00, remove trailing 0 *after decimal*
-                displayQuantity = scaledValue.toFixed(2);
-                if (displayQuantity.endsWith('.00')) { 
-                    displayQuantity = displayQuantity.slice(0, -3); // Remove .00
-                } else if (displayQuantity.includes('.') && displayQuantity.endsWith('0')) {
-                    displayQuantity = displayQuantity.slice(0, -1); // Remove trailing 0 only if there's a decimal
-                }
-                // Ensure it's a string for display
-                displayQuantity = displayQuantity.toString(); 
-            }
-            const unit = item.unit || '';
-            const ingredient = item.ingredient || '';
-            const text = `${displayQuantity} ${unit} ${ingredient}`.replace(/\s+/g, ' ').trim();
-            
-            // Unique ID for the checkbox and label association
-            const checkboxId = `ingredient-${recipeData.id}-${index}`;
-            // Track original index for filtering later
-            const ingredientIndex = index; 
-            
-            // Default checked state can be stored in recipeData if needed later, for now default true
-            const isChecked = item.checked === undefined ? true : item.checked; // Add a checked state to the item data
-
-            return `
-                <li class="ingredient-item">
-                    <input type="checkbox" id="${checkboxId}" data-recipe-id="${recipeData.id}" data-ingredient-index="${ingredientIndex}" ${isChecked ? 'checked' : ''}>
-                    <label for="${checkboxId}">${text}</label>
+            const ingredientText = `${item.quantity || ''} ${item.unit || ''} ${item.ingredient || ''}`.trim();
+            const uniqueId = `ingredient-${recipeData.id}-${index}`;
+            html += `
+                <li class="flex items-center">
+                    <input type="checkbox" id="${uniqueId}" 
+                           data-recipe-id="${recipeData.id}" 
+                           data-ingredient-index="${index}" 
+                           checked  // Always initially checked in HTML
+                           class="ingredient-checkbox h-4 w-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500 mr-2 shrink-0">
+                    <label for="${uniqueId}" class="ingredient-label text-sm">
+                        ${ingredientText}
+                    </label>
                 </li>
             `;
-        }).join(''); // Join list items into a single string
-
-        // Return the UL element containing the list items
-        // No surrounding div needed if UL has the class directly
-        return `<ul class="ingredient-list">${listItems}</ul>`;
+        });
+        html += '</ul>';
+        return html;
     }
     
     // Handler for clicking on list item (li) to toggle checkbox
@@ -517,15 +611,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // *** NEW: Display the returned processed list for review ***
             if (data.processedIngredients && data.originalTitle) {
-                // Make Section 3 visible
+                // Make Section 3 visible with fade-in
                 const finalListSection = document.getElementById('final-list-section');
                 if (finalListSection) {
-                    finalListSection.style.display = 'block';
+                    // finalListSection.style.display = 'block'; // Remove direct display style change
+                    finalListSection.classList.remove('opacity-0'); // Make it potentially visible
+                    finalListSection.style.display = 'block'; // Set display block first
+                    // Trigger opacity change
+                    requestAnimationFrame(() => { 
+                         finalListSection.classList.add('opacity-100'); 
+                    });
                 }
-                // Hide the loading indicator for the review button itself
                 setReviewLoadingState(false); 
-                // Display the list
-                displayReviewList(data.processedIngredients, data.originalTitle);
+                displayReviewList(data.processedIngredients, data.originalTitle, validRecipeTitles);
             } else {
                 throw new Error("Backend did not return the processed ingredient list.");
             }
@@ -539,8 +637,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- NEW: Function to display the review list ---
-    function displayReviewList(ingredients, originalTitle) {
-        console.log("[displayReviewList] Received ingredients:", JSON.parse(JSON.stringify(ingredients))); // Log deep copy
+    function displayReviewList(ingredients, originalTitle, validRecipeTitles = []) {
+        console.log("[displayReviewList] Received ingredients:", JSON.parse(JSON.stringify(ingredients))); 
+        console.log("[displayReviewList] Received titles:", validRecipeTitles);
         if (!reviewListArea) {
             console.error("[displayReviewList] reviewListArea element not found!");
             return;
@@ -549,9 +648,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Add helper text for review section
         const reviewHelper = document.createElement('p');
-        reviewHelper.classList.add('helper-text');
+        reviewHelper.classList.add('text-sm', 'text-gray-600', 'mb-4');
         reviewHelper.textContent = 'This is the final list after processing and combining items. Uncheck any items you don\'t want before creating the list.';
         reviewListArea.appendChild(reviewHelper);
+
+        // *** Add Dynamic Title Header ***
+        if (validRecipeTitles.length > 0) {
+            const titleHeader = document.createElement('h3');
+            titleHeader.classList.add('text-lg', 'font-semibold', 'mb-2'); // Match recipe card title style
+            
+            let titleText = 'Ingredients for ';
+            if (validRecipeTitles.length === 1) {
+                titleText += validRecipeTitles[0];
+            } else if (validRecipeTitles.length === 2) {
+                titleText += `${validRecipeTitles[0]} and ${validRecipeTitles[1]}`;
+            } else { // 3 or more
+                const lastTitle = validRecipeTitles.pop();
+                titleText += validRecipeTitles.join(', ') + ', and ' + lastTitle;
+            }
+            titleHeader.textContent = titleText;
+            reviewListArea.appendChild(titleHeader);
+        }
+        // *** End Dynamic Title Header ***
 
         if (!ingredients || ingredients.length === 0) {
             console.warn("[displayReviewList] No ingredients to display.");
@@ -560,7 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const list = document.createElement('ul');
-        list.classList.add('review-ingredient-list'); 
+        list.classList.add('review-ingredient-list', 'border', 'border-gray-300', 'rounded', 'p-4', 'space-y-2'); 
         console.log("[displayReviewList] Created UL element.");
 
         // ingredients is now expected to be [{name: ..., line_item_measurements: [{unit, quantity}, ...]}, ...]
@@ -568,7 +686,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ingredients.forEach((item, index) => {
                 console.log(`[displayReviewList] Processing item ${index}:`, JSON.parse(JSON.stringify(item)));
                 const li = document.createElement('li');
-                li.classList.add('ingredient-item'); 
+                li.classList.add('ingredient-item', 'flex', 'items-center', 'space-x-2'); 
                 
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
@@ -634,6 +752,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const label = document.createElement('label');
                 label.htmlFor = `review-ingredient-${index}`;
                 label.textContent = displayText;
+                label.classList.add('text-gray-700');
                 
                 console.log(`[displayReviewList] Item ${index} - Appending checkbox and label to LI.`);
                 li.appendChild(checkbox);
@@ -659,7 +778,22 @@ document.addEventListener('DOMContentLoaded', () => {
         // Change button text
         sendButton.textContent = 'Create Instacart Shopping List'; 
         // Apply the same class as the final link for similar styling
-        sendButton.classList.add('instacart-link-button'); 
+        sendButton.classList.add(
+            'instacart-link-button', 
+            'bg-blue-500', 
+            'hover:bg-blue-700', 
+            'text-white', 
+            'font-bold', 
+            'py-2', 
+            'px-4', 
+            'rounded-md', 
+            'disabled:opacity-50', 
+            'disabled:cursor-not-allowed', 
+            'transition', 
+            'duration-150', 
+            'ease-in-out',
+            'active:scale-95' // *** Add active state ***
+        );
         sendButton.dataset.originalTitle = originalTitle; // Store title for later use
         sendButton.addEventListener('click', handleSendToInstacart);
         console.log("[displayReviewList] Appending Send button.");
@@ -784,18 +918,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Updated loading state indicator
-    function setLoadingState(isLoading, fileCount = 0) {
-        if (isLoading) {
-            loadingIndicator.textContent = `Processing ${fileCount} image(s)...`;
-            loadingIndicator.style.display = 'block';
-            errorMessageDiv.textContent = ''; // Clear general error message
-            errorMessageDiv.style.display = 'none';
-        } else {
-            loadingIndicator.style.display = 'none';
-        }
-    }
-    
     // Updated error display (appends messages)
     function displayError(message) {
         const p = document.createElement('p');
@@ -813,14 +935,28 @@ document.addEventListener('DOMContentLoaded', () => {
         if (createListButton) { createListButton.disabled = true; }
         errorMessageDiv.innerHTML = ''; 
         errorMessageDiv.style.display = 'none';
-        clearReviewAreaAndFinalLink(); // Use new function
+        clearReviewAreaAndFinalLink(); 
         
+        // *** Hide final list section when clearing ***
+        const finalListSection = document.getElementById('final-list-section');
+        if (finalListSection) {
+            finalListSection.classList.remove('opacity-100');
+            finalListSection.classList.add('opacity-0');
+            // Optionally set display none after transition, or rely on opacity-0
+             setTimeout(() => { // Hide after transition
+                if (!finalListSection.classList.contains('opacity-100')) { // Check if it wasn't shown again quickly
+                     finalListSection.style.display = 'none';
+                }
+            }, 300); // Match duration
+        }
+
         // Also remove the pantry checkbox if it exists
         const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
         if (existingCheckboxDiv) {
             existingCheckboxDiv.remove();
             pantryCheckbox = null; // Clear the reference
         }
+        updateEmptyStateVisibility(); // Call helper instead
     }
 
     // Placeholder functions (ensure clearInstacartResults is correct)
@@ -901,7 +1037,26 @@ document.addEventListener('DOMContentLoaded', () => {
         link.href = url;
         link.textContent = 'Open Instacart Shopping List';
         link.target = '_blank'; // Open in new tab
-        link.classList.add('instacart-link-button'); // Add class for styling
+        // *** Apply Tailwind button styles (like the orange Create button) ***
+        link.classList.add(
+            'inline-block', // Make it behave like a button for padding/margin
+            'bg-orange-500', 
+            'hover:bg-orange-600', 
+            'text-white', 
+            'font-bold', 
+            'py-2', 
+            'px-6', 
+            'rounded-md', 
+            'transition', 
+            'duration-150', 
+            'ease-in-out',
+            'active:scale-95',
+            'focus:outline-none', 
+            'focus:ring-2', 
+            'focus:ring-offset-2', 
+            'focus:ring-orange-500' 
+        );
+        // link.classList.add('instacart-link-button'); // Remove old class
         
         instacartLinkArea.appendChild(link);
     }
@@ -916,26 +1071,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const containerDiv = document.createElement('div');
         containerDiv.id = 'pantry-checkbox-container';
-        containerDiv.style.marginBottom = '15px'; // Add some spacing
+        containerDiv.classList.add('flex', 'items-center', 'mb-4');
         
         pantryCheckbox = document.createElement('input');
         pantryCheckbox.type = 'checkbox';
         pantryCheckbox.id = 'pantry-items-checkbox';
+        pantryCheckbox.classList.add(
+            'h-4', 
+            'w-4', 
+            'text-orange-600',
+            'border-gray-300', 
+            'rounded', 
+            'focus:ring-orange-500',
+            'mr-2',
+            'shrink-0'
+        );
         
         const label = document.createElement('label');
         label.htmlFor = 'pantry-items-checkbox';
-        label.textContent = ' I have commonly found pantry items'; // Shorter label
-        label.style.cursor = 'pointer';
-        label.style.userSelect = 'none';
+        label.textContent = ' I have commonly found pantry items';
+        label.classList.add('text-sm', 'font-medium', 'text-gray-700', 'cursor-pointer', 'select-none');
 
         // Add helper text span
         const helperSpan = document.createElement('span');
-        helperSpan.classList.add('helper-text');
+        helperSpan.classList.add('text-xs', 'text-gray-500', 'ml-1');
         helperSpan.textContent = ' (salt, pepper, oil, sugar, etc. - quickly unchecks these)';
 
         containerDiv.appendChild(pantryCheckbox);
         containerDiv.appendChild(label);
-        containerDiv.appendChild(helperSpan); // Add helper text after label
+        containerDiv.appendChild(helperSpan);
 
         // Insert before the recipe results container
         resultsSection.insertBefore(containerDiv, recipeResultsContainer); 
@@ -949,51 +1113,47 @@ document.addEventListener('DOMContentLoaded', () => {
         const isChecked = event.target.checked;
         const shouldBeChecked = !isChecked; // If master is checked, items should be unchecked (false), and vice versa
         
-        // --- Combine sources: Iterate through both completed/failed recipes and in-progress ones --- 
-        const allRecipeSources = [
-            ...processedRecipes, // Completed/failed recipes
-            ...Object.values(recipeData) // In-progress recipes from the map
-        ]; 
-        // Use a Set to avoid processing the same recipe ID twice if it somehow exists in both briefly during transition
-        const processedIds = new Set(); 
+        processedRecipes.forEach(recipeInfo => {
+            if (!recipeInfo || !recipeInfo.ingredients) return; // Skip if no recipe or ingredients
 
-        allRecipeSources.forEach(recipeInfo => {
-            // Skip if we already processed this ID (relevant if item just finished and is in both)
-            if (!recipeInfo || processedIds.has(recipeInfo.id)) {
-                return;
-            }
-            processedIds.add(recipeInfo.id);
+            recipeInfo.ingredients.forEach((item, index) => {
+                if (!item || typeof item.ingredient === 'undefined') return; // Skip invalid items
 
-            // --- Original logic applied to recipeInfo --- 
-            if (recipeInfo.ingredients && recipeInfo.ingredients.length > 0) {
-                recipeInfo.ingredients.forEach((item, index) => {
-                    const ingredientNameLower = (item.ingredient || '').toLowerCase(); // Use item.ingredient
-                    // Check if the ingredient name contains any common keyword
-                    const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
+                const ingredientNameLower = item.ingredient.toLowerCase();
+                const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
+                
+                if (isCommon) {
+                    // Update the data model (optional, but good practice)
+                    item.checked = shouldBeChecked;
                     
-                    if (isCommon) {
-                        // Update the data (ensure item object exists)
-                        if (item) item.checked = shouldBeChecked;
-                        
-                        // Update the corresponding checkbox in the DOM
-                        const checkboxElement = document.getElementById(`ingredient-${recipeInfo.id}-${index}`);
-                        if (checkboxElement) {
-                            checkboxElement.checked = shouldBeChecked;
+                    // Update the DOM checkbox
+                    const uniqueId = `ingredient-${recipeInfo.id}-${index}`;
+                    const checkboxElement = document.getElementById(uniqueId);
+                    if (checkboxElement) {
+                        checkboxElement.checked = shouldBeChecked;
+                    }
+
+                    // *** Add/Remove Label Styling ***
+                    const labelElement = document.querySelector(`label[for='${uniqueId}']`);
+                    if (labelElement) {
+                        if (shouldBeChecked) {
+                            // Item should be checked (pantry box unchecked)
+                            labelElement.classList.remove('line-through', 'text-gray-400');
+                        } else {
+                            // Item should be unchecked (pantry box checked)
+                            labelElement.classList.add('line-through', 'text-gray-400');
                         }
                     }
-                });
-            }
-            // --- End Original logic --- 
+                    // *** End Label Styling ***
+                }
+            });
         });
-        // --- End Combined sources --- 
 
         if (isChecked) {
-            console.log("Pantry checkbox checked - Unchecked common items."); // Clarified log
+            console.log("Pantry checkbox checked - Unchecked common items.");
         } else {
             console.log("Pantry checkbox unchecked - Re-checking common items.");
         }
-        // Might need to update button state if disabling when *all* are unchecked is desired
-        // updateCreateListButtonState(); 
     }
 
     // --- NEW: Function to start polling ---
@@ -1089,6 +1249,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 renderSingleRecipeResult(recipeInfo, false); // Render final result
                 updateCreateListButtonState();
+                updateEmptyStateVisibility(); // << Add call here
                 
                 // If this was the last job being processed, create the pantry checkbox
                 if (Object.keys(recipeData).length === 0 && !document.getElementById('pantry-checkbox-container')) {
@@ -1111,6 +1272,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 renderSingleRecipeResult(recipeInfo, false); // Re-render the card to show the error
                 updateCreateListButtonState(); // Update button state after failure
+                updateEmptyStateVisibility(); // << Add call here
 
                 // If this was the last job being processed, create the pantry checkbox
                 if (Object.keys(recipeData).length === 0 && !document.getElementById('pantry-checkbox-container')) {
@@ -1133,6 +1295,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error(`[Recipe ${recipeId}] Error during polling:`, error);
             stopPolling(recipeId, `Error during polling: ${error.message}`);
+            updateEmptyStateVisibility(); // << Add call here
         }
     }
 
@@ -1166,6 +1329,7 @@ document.addEventListener('DOMContentLoaded', () => {
                  createPantryCheckbox();
              }
         }
+        updateEmptyStateVisibility(); // Call helper as recipeData is updated
     }
 
     // --- Helper function to clear specific recipe card error ---
@@ -1185,31 +1349,49 @@ document.addEventListener('DOMContentLoaded', () => {
     if (addUrlButton && recipeUrlInput) {
         const handleUrlSubmit = () => {
             console.log('Attempting URL submit...');
-            let url = recipeUrlInput.value.trim(); // Changed const to let
-            // Clear previous error message
+            let url = recipeUrlInput.value.trim(); 
+            
             if(urlErrorMessageDiv) {
                 urlErrorMessageDiv.textContent = '';
                 urlErrorMessageDiv.style.display = 'none';
             }
             
-            if (url) {
-                // Auto-heal: Prepend https:// if protocol is missing
-                if (!url.toLowerCase().startsWith('http://') && !url.toLowerCase().startsWith('https://')) {
-                    console.log('Protocol missing, prepending https:// to:', url);
-                    url = 'https://' + url;
-                }
-                
-                console.log('Processing URL:', url);
-                processSingleUrl(url); // Call the function now defined inside
-                recipeUrlInput.value = ''; // Clear input after adding
-            } else {
+            // *** Use validator.js for Robust Validation ***
+            if (!url) {
                 console.log('URL input was empty.');
-                // Optionally show an error for empty input
-                // if (urlErrorMessageDiv) {
-                //     urlErrorMessageDiv.textContent = 'Please enter a URL.';
-                //     urlErrorMessageDiv.style.display = 'block';
-                // }
+                if (urlErrorMessageDiv) {
+                    urlErrorMessageDiv.textContent = 'Please enter a URL.';
+                    urlErrorMessageDiv.style.display = 'block';
+                }
+                return; // Stop if empty
             }
+
+            // Define validation options
+            const validationOptions = {
+                protocols: ['http','https'], // Require http or https
+                require_protocol: true,
+                require_valid_protocol: true,
+                require_host: true, 
+                // require_tld: true, // Ensure it has a TLD like .com, .org (might be too strict for some cases?)
+                validate_length: true
+            };
+
+            // Check if the URL is valid using the library
+            if (validator.isURL(url, validationOptions)) {
+                console.log('Validator.js: URL format appears valid:', url);
+                console.log('Proceeding to process URL:', url);
+                processSingleUrl(url); 
+                recipeUrlInput.value = ''; // Clear input only on successful validation/start
+            } else {
+                // URL is invalid according to validator.js
+                console.log('Validator.js: Invalid URL format entered:', url);
+                if (urlErrorMessageDiv) {
+                    urlErrorMessageDiv.textContent = 'Invalid URL format. Please enter a full, valid web address (e.g., https://example.com).';
+                    urlErrorMessageDiv.style.display = 'block';
+                }
+                // Do not proceed if format is invalid
+            }
+            // *** End validator.js usage ***
         };
 
         addUrlButton.addEventListener('click', handleUrlSubmit);
@@ -1299,7 +1481,73 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderSingleRecipeResult(recipeInfo, false); 
             }
         }
+        updateEmptyStateVisibility(); // Call helper as recipeData is updated
     } // <<< Closing brace for processSingleUrl
+
+    // --- Add listener for remove button clicks (event delegation) --- 
+    if (recipeResultsContainer) {
+        recipeResultsContainer.addEventListener('click', handleRemoveRecipe);
+    } else {
+        console.error("Could not find recipeResultsContainer to attach remove listener.");
+    }
+
+    // --- NEW: Handler for removing a recipe card --- 
+    function handleRemoveRecipe(event) {
+        // Check if the clicked element is the remove button or inside it (the SVG)
+        const removeButton = event.target.closest('.remove-recipe-button'); 
+        if (!removeButton) {
+            return; // Click wasn't on a remove button
+        }
+
+        const recipeId = removeButton.dataset.recipeId;
+        if (!recipeId) {
+            console.error("Remove button clicked, but no recipeId found.");
+            return;
+        }
+        console.log(`Remove button clicked for recipe: ${recipeId}`);
+
+        // *** Add Confirmation Dialog ***
+        // Try to get the title for a more informative message
+        let recipeTitle = recipeId; // Default to ID
+        const recipeInfo = processedRecipes.find(r => r.id === recipeId) || recipeData[recipeId];
+        if (recipeInfo && recipeInfo.title) {
+            recipeTitle = recipeInfo.title;
+        }
+        
+        if (!window.confirm(`Are you sure you want to remove the recipe "${recipeTitle}"?`)) {
+            console.log(`Removal cancelled for recipe: ${recipeId}`);
+            return; // Stop if user cancels
+        }
+        // *** End Confirmation Dialog ***
+
+        // Stop polling if this recipe was still in progress
+        if (recipeData[recipeId]) {
+            console.log(`Stopping polling for removed recipe: ${recipeId}`);
+            stopPolling(recipeId); // stopPolling already deletes from recipeData
+        } else {
+             // If not in recipeData, ensure it's removed from processedRecipes
+            processedRecipes = processedRecipes.filter(recipe => recipe.id !== recipeId);
+        }
+
+        // Remove the card from the DOM
+        const recipeCard = document.getElementById(recipeId);
+        if (recipeCard) {
+            recipeCard.remove();
+        }
+
+        // Update UI states
+        updateEmptyStateVisibility();
+        updateCreateListButtonState();
+        
+        // Remove pantry checkbox if no recipes are left
+        if (Object.keys(recipeData).length === 0 && processedRecipes.length === 0) {
+            const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
+            if (existingCheckboxDiv) {
+                existingCheckboxDiv.remove();
+                pantryCheckbox = null;
+            }
+        }
+    }
 
 }); // <<< RESTORED Closing brace for DOMContentLoaded listener
 
