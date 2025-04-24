@@ -24,9 +24,20 @@ async function sendToInstacart(ingredients, title = 'My Recipe Ingredients') {
     const instacartRequestBody = {
         title: title,
         link_type: 'shopping_list',
-        line_items: ingredients.map(item => ({
-            name: typeof item === 'string' ? item : item.name || item.text || 'Unknown ingredient'
-        }))
+        line_items: ingredients.map(item => {
+            // Ensure item and measurements are valid before mapping
+            const lineItemMeasurements = (item.line_item_measurements && Array.isArray(item.line_item_measurements))
+                ? item.line_item_measurements.map(m => ({
+                    unit: m.unit,
+                    quantity: m.quantity
+                  }))
+                : []; // Send empty array if measurements are missing/invalid
+
+            return {
+                name: item.name || 'Unknown Ingredient',
+                line_item_measurements: lineItemMeasurements
+            };
+        })
     };
     
     try {
