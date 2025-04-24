@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Define Polling Constants --- 
     const POLLING_INTERVAL = 3000; // Milliseconds (e.g., 3 seconds)
     const MAX_POLLING_ATTEMPTS = 40; // e.g., 40 attempts * 3s = 120s timeout
-    const POLLING_TIMEOUT_MS = 20000; // 20 seconds overall timeout for processing
+    const POLLING_TIMEOUT_MS = 60000; // <<< INCREASED TIMEOUT to 60 seconds >>>
 
     // --- Define Common Pantry Item Keywords (lowercase) --- 
     const commonItemsKeywords = [
@@ -163,6 +163,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- Status Mapping ---
         let displayStatus = loadingMessage;
         if (isLoading) {
+            // --- UPDATED: Show a consistent "in progress" message --- 
+            if (internalStatus && internalStatus !== 'completed' && internalStatus !== 'failed' && internalStatus !== 'not_found') {
+                displayStatus = 'Recipe analysis in progress... please wait'; 
+            } else {
+                displayStatus = loadingMessage; // Fallback for initial upload or if status is unknown
+            }
+            // --- END UPDATE ---
+            /* --- REMOVED --- 
             switch (internalStatus) {
                 case 'pending':
                     displayStatus = 'Processing image...';
@@ -173,6 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 default:
                     displayStatus = loadingMessage; // Fallback (e.g., 'Uploading...')
             }
+            */
         }
         let recipeDiv = document.getElementById(recipeData.id);
         if (!recipeDiv) {
