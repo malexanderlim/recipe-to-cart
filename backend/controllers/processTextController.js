@@ -7,6 +7,39 @@
 const { redis } = require('../services/redisService');
 const { callAnthropic } = require('../services/anthropicService');
 
+// --- ADDED: Helper for Anthropic retry ---
+async function callAnthropicWithRetry(systemPrompt, userPrompt, jobId, model = 'claude-3-haiku-20240307', maxRetries = 2, delay = 2000) {
+    let attempts = 0;
+    while (attempts <= maxRetries) {
+        attempts++;
+        try {
+            console.log(`[AnthropicRetry Job ${jobId}] Attempt ${attempts} to call Anthropic model ${model}`);
+            const response = await callAnthropic(systemPrompt, userPrompt, model);
+            console.log(`[AnthropicRetry Job ${jobId}] Attempt ${attempts} successful.`);
+            return response; // Return successful response
+        } catch (error) {
+            console.warn(`[AnthropicRetry Job ${jobId}] Attempt ${attempts} failed. Error:`, error);
+            // Check if it's a potentially retryable error (e.g., timeout, 5xx status codes)
+            // Note: Specific error codes depend on the underlying Anthropic client/library behavior
+            const isRetryable = error.status >= 500 || // Server errors
+                               error.code === 'ETIMEDOUT' || // Generic timeout
+                               error.code === 'ECONNRESET'; // Connection reset
+            
+            if (isRetryable && attempts <= maxRetries) {
+                console.log(`[AnthropicRetry Job ${jobId}] Retryable error detected. Retrying in ${delay}ms... (${maxRetries - attempts} retries left)`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                // If not retryable or retries exhausted, re-throw
+                console.error(`[AnthropicRetry Job ${jobId}] Not retrying or retries exhausted. Throwing error.`);
+                throw error;
+            }
+        }
+    }
+    // Should not be reached if maxRetries >= 0
+    throw new Error(`[AnthropicRetry Job ${jobId}] Exceeded max retries (${maxRetries}) without success calling Anthropic.`);
+}
+// --- END Helper ---
+
 /**
  * Process text extracted from images by Google Vision (Stage 1 - Initial Extraction)
  * Called as background worker by /api/process-image
@@ -66,15 +99,24 @@ async function processText(req, res) {
         const anthropicStartTime = Date.now(); // Start timer
         console.log(`[Process Text Job ${jobId}] Calling Anthropic API... (Timestamp: ${anthropicStartTime})`);
         try {
-            rawJsonResponse = await callAnthropic(systemPromptStage1, userPromptStage1); // Using existing helper
+            // --- USE RETRY HELPER --- 
+            rawJsonResponse = await callAnthropicWithRetry(systemPromptStage1, userPromptStage1, jobId); 
             const anthropicEndTime = Date.now(); // End timer
-            const anthropicDuration = anthropicEndTime - anthropicStartTime;
-            console.log(`[Process Text Job ${jobId}] Received response from Anthropic. Duration: ${anthropicDuration}ms. (Timestamp: ${anthropicEndTime})`);
+            const anthropicDuration = anthropicEndTime - anthropicStartTime; // Duration includes retries if any
+            console.log(`[Process Text Job ${jobId}] Received response from Anthropic (potentially after retries). Total Duration: ${anthropicDuration}ms. (Timestamp: ${anthropicEndTime})`);
         } catch (anthropicError) {
-            console.error(`[Process Text Job ${jobId}] Anthropic API call failed:`, anthropicError);
-            const failedData = { ...jobData, status: 'failed', error: 'Could not understand ingredients from the text.', extractedText: extractedText, finishedAt: Date.now() };
+            // This catch block now handles errors *after* retries have failed
+            console.error(`[Process Text Job ${jobId}] Anthropic API call failed AFTER retries:`, anthropicError);
+            const failedData = { 
+                ...jobData, 
+                status: 'failed', 
+                error: 'Could not understand ingredients from the text after multiple attempts.', // Updated error message
+                extractedText: extractedText, 
+                finishedAt: Date.now() 
+            };
             await redis.set(jobId, JSON.stringify(failedData));
-            throw anthropicError; // Propagate to main catch
+            // Re-throw the error to be caught by the main outer catch block which sends the 200 response
+            throw anthropicError; 
         }
         // ------------------------------------------------------
 

@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Define Polling Constants --- 
     const POLLING_INTERVAL = 3000; // Milliseconds (e.g., 3 seconds)
     const MAX_POLLING_ATTEMPTS = 40; // e.g., 40 attempts * 3s = 120s timeout
-    const POLLING_TIMEOUT_MS = 20000; // 20 seconds overall timeout for processing
+    const POLLING_TIMEOUT_MS = 60000; // <<< INCREASED TIMEOUT to 60 seconds >>>
 
     // --- Define Common Pantry Item Keywords (lowercase) --- 
     const commonItemsKeywords = [
@@ -94,7 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function processSingleFile(file) {
         const recipeId = `recipe-${recipeCounter++}`;
         
-        const recipeData = { 
+        const recipeDataObj = { // Renamed variable to avoid confusion with global map
             id: recipeId, 
             file: file, 
             title: file.name, // Default title
@@ -108,9 +108,10 @@ document.addEventListener('DOMContentLoaded', () => {
             pollingTimeoutId: null, // Added for overall timeout
             lastKnownStatus: null // Added to track status for timeout message
         };
-        processedRecipes.push(recipeData);
+        // Store in the global map for active polling
+        recipeData[recipeId] = recipeDataObj; 
         // Render initial placeholder with loading state
-        renderSingleRecipeResult(recipeData, true, 'Initializing upload...'); // Add loading message
+        renderSingleRecipeResult(recipeDataObj, true, 'Initializing upload...'); // Add loading message
 
         // Clear previous errors for this specific card (if any)
         clearRecipeError(recipeId);
@@ -129,11 +130,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await response.json();
                 const jobId = data.jobId;
                 if (jobId) {
-                    recipeData.jobId = jobId; // Store jobId
-                    recipeData.pollingAttempts = 0; // Initialize polling counter
+                    recipeDataObj.jobId = jobId; // Store jobId
+                    recipeDataObj.pollingAttempts = 0; // Initialize polling counter
                     console.log(`[Recipe ${recipeId}] Upload accepted. Job ID: ${jobId}. Starting polling.`);
                     // Update UI to show 'Processing...'
-                    renderSingleRecipeResult(recipeData, true, 'Uploading image...'); // Initial status
+                    renderSingleRecipeResult(recipeDataObj, true, 'Uploading image...'); // Initial status
                     // Start polling
                     startPollingJobStatus(recipeId, jobId);
                 } else {
@@ -147,10 +148,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         } catch (error) {
             console.error(`[Recipe ${recipeId}] Error initiating upload for ${file.name}:`, error);
-            recipeData.error = `Upload Error: ${error.message}`;
+            recipeDataObj.error = `Upload Error: ${error.message}`;
             displayError(`Failed to start processing for ${file.name}.`); // General error message
             // Update the specific recipe block with the error
-            renderSingleRecipeResult(recipeData, false); // isLoading = false to show error
+            renderSingleRecipeResult(recipeDataObj, false); // isLoading = false to show error
             updateCreateListButtonState(); // Re-evaluate button state after error
         }
         // REMOVE the old synchronous result handling and re-rendering call here
@@ -162,6 +163,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- Status Mapping ---
         let displayStatus = loadingMessage;
         if (isLoading) {
+            // --- UPDATED: Show a consistent "in progress" message --- 
+            if (internalStatus && internalStatus !== 'completed' && internalStatus !== 'failed' && internalStatus !== 'not_found') {
+                displayStatus = 'Recipe analysis in progress... please wait'; 
+            } else {
+                displayStatus = loadingMessage; // Fallback for initial upload or if status is unknown
+            }
+            // --- END UPDATE ---
+            /* --- REMOVED --- 
             switch (internalStatus) {
                 case 'pending':
                     displayStatus = 'Processing image...';
@@ -172,6 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 default:
                     displayStatus = loadingMessage; // Fallback (e.g., 'Uploading...')
             }
+            */
         }
         let recipeDiv = document.getElementById(recipeData.id);
         if (!recipeDiv) {
@@ -932,11 +942,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 recipeInfo.scaleFactor = 1; // Reset scale factor
                 recipeInfo.error = null; // Clear any previous error
                 
-                // *** Important: Move completed data from map to array ***
-                // Check if it's already been pushed (e.g., multiple 'completed' polls)
-                if (!processedRecipes.find(r => r.id === recipeId)) {
-                    processedRecipes.push(recipeInfo);
-                }
+                // *** Move completed data from map to array ***
+                processedRecipes.push(recipeInfo); // Add to final results array
                 // Remove from the map once processing is final
                 delete recipeData[recipeId];
                 // ****************************************************
@@ -954,14 +961,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 stopPolling(recipeId); // Stop polling and timeout
                 recipeInfo.error = data.error || 'Processing failed.'; // Store the error
                 
-                // *** Important: Move failed data from map to array for display ***
-                 if (!processedRecipes.find(r => r.id === recipeId)) {
-                     processedRecipes.push(recipeInfo);
-                 }
-                 delete recipeData[recipeId]; // Remove from map
+                // *** Move failed data from map to array for display ***
+                processedRecipes.push(recipeInfo); // Add to final results array
+                delete recipeData[recipeId]; // Remove from map
                 // ***********************************************************
 
                 renderSingleRecipeResult(recipeInfo, false); // Re-render the card to show the error
+                updateCreateListButtonState(); // Update button state after failure
 
                 // If this was the last job being processed, create the pantry checkbox
                 if (Object.keys(recipeData).length === 0 && !document.getElementById('pantry-checkbox-container')) {
@@ -1004,9 +1010,7 @@ document.addEventListener('DOMContentLoaded', () => {
              // renderSingleRecipeResult(recipeInfo, false);
              
              // *** Important: Move error data from map to array if stopping with error ***
-             if (!processedRecipes.find(r => r.id === recipeId)) {
-                 processedRecipes.push(recipeInfo);
-             }
+             processedRecipes.push(recipeInfo); // Add to final results array
              delete recipeData[recipeId]; // Remove from map
             // ***********************************************************
 

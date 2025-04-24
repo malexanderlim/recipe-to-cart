@@ -570,6 +570,62 @@ async function createList(req, res) {
                  return a.unit.localeCompare(b.unit); 
             });
 
+            // --- START: Specific Garlic Adjustments (Hybrid Approach) ---
+            if (normalizedName === 'garlic') {
+                console.log(`  V7 Adjusting Garlic Measurements: Before: ${JSON.stringify(finalMeasurements)}`);
+                let hasEach = false;
+                let hasLb = false;
+                let cloveQuantity = 0;
+
+                // Check existing units and find clove quantity
+                finalMeasurements.forEach(m => {
+                    if (m.unit === 'each' || m.unit === 'head') hasEach = true;
+                    if (m.unit === 'lb') hasLb = true;
+                    if (m.unit === 'clove') cloveQuantity = m.quantity;
+                });
+
+                // 1. Ensure 'each' (Head) is present
+                if (!hasEach) {
+                    let headsToAdd = 1; // Default fallback
+                    if (cloveQuantity > 0) {
+                        headsToAdd = Math.ceil(cloveQuantity / 11); // Estimate 10-12 cloves/head, ceil for safety
+                        console.log(`    Garlic: Adding 'each' based on ${cloveQuantity} cloves -> ${headsToAdd} heads`);
+                    }
+                    finalMeasurements.push({ unit: 'each', quantity: Math.max(1, headsToAdd) }); // Ensure at least 1
+                }
+
+                // 2. Ensure 'lb' is present (optional, but good for Instacart)
+                if (!hasLb) {
+                    let poundsToAdd = 0.15; // Default fallback weight
+                    if (hasEach) {
+                        const eachMeasurement = finalMeasurements.find(m => m.unit === 'each' || m.unit === 'head');
+                        if (eachMeasurement) {
+                            poundsToAdd = parseFloat((eachMeasurement.quantity * 0.12).toFixed(2)); // Estimate 0.1-0.15 lb/head
+                             console.log(`    Garlic: Adding 'lb' based on ${eachMeasurement.quantity} heads -> ${poundsToAdd} lbs`);
+                        }
+                    } else if (cloveQuantity > 0) {
+                         poundsToAdd = parseFloat((cloveQuantity * 0.012).toFixed(2)); // Estimate 0.01-0.015 lb/clove
+                         console.log(`    Garlic: Adding 'lb' based on ${cloveQuantity} cloves -> ${poundsToAdd} lbs`);
+                    }
+                    finalMeasurements.push({ unit: 'lb', quantity: Math.max(0.05, poundsToAdd) }); // Ensure minimum weight
+                }
+
+                // 3. Remove 'clove' unit
+                finalMeasurements = finalMeasurements.filter(m => m.unit !== 'clove');
+                
+                // 4. Re-sort if needed (ensure 'each' or 'lb' is first if primary was 'clove')
+                // Basic sort: 'each' first if present, then 'lb', then alpha
+                finalMeasurements.sort((a, b) => {
+                    if (a.unit === 'each') return -1; 
+                    if (b.unit === 'each') return 1;
+                    if (a.unit === 'lb') return -1;
+                    if (b.unit === 'lb') return 1;
+                    return a.unit.localeCompare(b.unit); 
+                });
+                console.log(`  V7 Adjusting Garlic Measurements: After: ${JSON.stringify(finalMeasurements)}`);
+            }
+            // --- END: Specific Garlic Adjustments ---
+
             if (finalMeasurements.length > 0) {
                  // If conversion failed for any part of this item, maybe add a note?
                  // For now, just use the normalized name.

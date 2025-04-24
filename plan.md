@@ -6,6 +6,33 @@
 
 These issues directly impact the core value proposition or the demo user experience and MUST be addressed.
 
+*   **[NEW - P0] Migrate Image->Text Trigger to QStash:**
+    *   **Problem:** The current asynchronous trigger (`fetchWithRetry` from `/api/process-image` to `/api/process-text`) is unreliable. Logs show the trigger sometimes fails silently without invoking `/api/process-text`, likely due to cold starts or platform issues, leaving jobs stuck in `vision_completed`. Direct HTTP calls lack guaranteed delivery and robust retry mechanisms needed for this workflow.
+    *   **Goal:** Replace the direct `fetch` trigger with Upstash QStash for guaranteed, reliable delivery of the job trigger from the image processing step to the text processing step.
+    *   **Solution: Decouple with QStash Message Queue:**
+        1.  **Dependencies:** Add `@upstash/qstash` to `backend/package.json`.
+        2.  **Environment Variables:** Add `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` to Vercel environment variables. Obtain these from the Upstash console. Document `QSTASH_URL` (the target URL for publishing messages) if needed.
+        3.  **Modify Caller (`/api/process-image`):**
+            *   Import and initialize the QStash client (`@upstash/qstash`).
+            *   After successfully saving the `vision_completed` status to Redis, instead of calling `fetchWithRetry`, use `qstashClient.publishJSON()` to send the `{ jobId }` payload to a designated QStash URL/topic. This URL will point to the new worker endpoint (Step 4).
+            *   Remove the `fetchWithRetry` helper function and associated `.catch` logic specific to the fetch trigger failure within `processImageController.js`.
+        4.  **Create New Worker (`/api/process-text-worker`):**
+            *   Create a new controller `backend/controllers/processTextWorkerController.js` and route `backend/routes/processTextWorkerRoutes.js`.
+            *   Move the *entire* core logic from the existing `/api/process-text` function (fetch job from Redis, call Anthropic w/ retry, parse, update Redis status to 'completed' or 'failed') into the new worker controller.
+            *   The worker function will be triggered by POST requests from QStash, receiving the `{ jobId }` in the request body.
+        5.  **Implement QStash Signature Verification:**
+            *   In the new `/api/process-text-worker` route/controller, use the QStash SDK's verification middleware (`verifySignature`) *before* executing any logic. This validates the `Upstash-Signature` header sent by QStash, ensuring requests are legitimate. Reject requests failing verification with a 401/403 status.
+        6.  **Configure QStash:** In the Upstash Console:
+            *   Create a QStash URL/topic.
+            *   Configure the target URL to point to the deployed Vercel URL for `/api/process-text-worker`.
+            *   Configure a suitable retry policy (e.g., exponential backoff, 3-5 retries) for failed deliveries.
+        7.  **Cleanup:**
+            *   Remove the old `/api/process-text` route and controller (`processTextController.js`, `processTextRoutes.js`) as they are no longer triggered by the image flow.
+        8.  **Testing:** Perform end-to-end testing for image uploads. Verify:
+            *   `/api/process-image` logs successful publishing to QStash.
+            *   `/api/process-text-worker` logs successful invocation, signature verification, processing, and completion.
+            *   Check the Upstash console for message delivery status (success/retries/failures).
+            *   Confirm the frontend UI updates correctly based on polling `/api/job-status`.
 *   **[X] Fix Ingredient Consolidation & Normalization (Revised Hybrid Approach V2 - SUCCESSFUL):**
     *   **P0 Addendum: Fixing Mixed-Unit Ingredient Consolidation (Garlic Example) - Strategy V2**
         *   **1. Problem Statement:** Previous attempts using multiple LLM calls or single calls with complex instructions failed due to LLM math errors, latency, or inability to handle context correctly (e.g., garlic cloves vs heads). The core issue is reliably consolidating diverse units while leveraging LLM knowledge without relying on its math.
@@ -50,11 +77,12 @@ These issues directly impact the core value proposition or the demo user experie
     *   Backend Action: `/api/create-list` returns adjusted list with `line_item_measurements`. `/api/send-to-instacart` accepts this structure. **(DONE)**
     *   Frontend Action: UI displays primary measurement, stores full data, handles correct submission. **(DONE)**
 *   **[X] Implement Asynchronous Image Processing:** Solved Vercel timeout issues using Vercel Blob, KV (Redis), and chained background functions (`/api/upload` -> `/api/process-image` -> `/api/process-text`).
-*   **[ ] Address Stuck Processing (`vision_completed` state):**
+*   **[ ] Address Stuck Processing (`vision_completed` state):** (Superseded by QStash migration for the trigger failure aspect. UX improvement for handling timeouts still relevant).
     *   **Problem:** Occasionally, jobs get stuck in the `vision_completed` status and never proceed to the `/api/process-text` step (Anthropic analysis) or time out gracefully. The frontend polling eventually shows a generic timeout error, but the root cause seems to be the silent failure of the trigger between the two background functions.
     *   **Investigation (DONE):** Added detailed logging. Confirmed that the `fetch` from `/api/process-image` to `/api/process-text` sometimes dispatches successfully but fails to invoke the target function *without* triggering the `.catch()` block. The job remains `vision_completed` in Redis.
-    *   **Action 1 (Mitigation - DONE):** Implemented a frontend timeout (`POLLING_TIMEOUT_MS = 20000`) in `frontend/script.js`. If polling detects the job hasn't progressed after 20s, it stops polling and displays a specific error message (\"Recipe analysis timed out...\" if last status was `vision_completed`, generic timeout otherwise).
-    *   **Action 2 (Required UX Improvement - TODO):** Currently, a timeout affects the whole batch. **Need to allow users to dismiss/remove *only* the specific recipe card that timed out** and potentially re-upload just that image, without clearing other successful results in the session. This likely involves:
+    *   **Action 1 (Mitigation - DONE):** Implemented a frontend timeout (`POLLING_TIMEOUT_MS = 60000`) in `frontend/script.js`. If polling detects the job hasn't progressed after 60s, it stops polling and displays a specific error message ("Recipe analysis timed out..." if last status was `vision_completed`, generic timeout otherwise).
+    *   **Action 2 (QStash Migration - TODO):** Implement the QStash migration described above to fix the root cause of the trigger failure.
+    *   **Action 3 (Required UX Improvement - TODO):** Currently, a timeout affects the whole batch. **Need to allow users to dismiss/remove *only* the specific recipe card that timed out** and potentially re-upload just that image, without clearing other successful results in the session. This likely involves:
         *   Adding a 'close' or 'retry' button to the recipe card when it displays the timeout error.
         *   Modifying `processSingleFile` or adding a new function to handle re-uploading for a specific card ID.
         *   Ensuring `handleReviewList` correctly ignores dismissed/failed cards.
@@ -62,10 +90,10 @@ These issues directly impact the core value proposition or the demo user experie
     *   **Problem:** Basic loading indicators and lack of clear feedback on button clicks. Internal state names exposed. Attempt counts shown.
     *   **Action:**
         *   Implement integrated progress display during image processing (e.g., overall progress bar, status update per recipe card). (Deferred)
-        *   **[X] Improve Status Messages:** In `frontend/script.js`, mapped internal job statuses (`pending`, `vision_completed`) to user-friendly text (\"Processing image...\", \"Analyzing ingredients...\").
-        *   **[X] Hide Attempt Counter:** Removed the \"(Attempt X)\" display from the frontend processing messages.
-        *   Add a loading spinner to the \"Create Instacart List\" button on click.
-        *   On success, clearly display the \"Open Instacart Shopping List\" link (styled prominently, maybe like a button) and disable/hide the create button.
+        *   **[X] Improve Status Messages:** In `frontend/script.js`, mapped internal job statuses (`pending`, `vision_completed`) to user-friendly text ("Processing image...", "Analyzing ingredients...").
+        *   **[X] Hide Attempt Counter:** Removed the "(Attempt X)" display from the frontend processing messages.
+        *   Add a loading spinner to the "Create Instacart List" button on click.
+        *   On success, clearly display the "Open Instacart Shopping List" link (styled prominently, maybe like a button) and disable/hide the create button.
 *   **[X] Implement Clear Error Handling:**
     *   **Problem:** Unclear how errors are currently displayed to the user. Need to leverage improved backend error messages.
     *   **Action:** Ensure user-friendly error messages appear *in the UI* for:
@@ -173,7 +201,7 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
     *   Define `builds` for the backend (`@vercel/node`).
     *   Define `routes` to serve frontend static files and route `/api/*` to the backend function.
 5.  **[ ] Environment Variables:**
-    *   Identify required secrets (API keys, etc.).
+    *   Identify required secrets (API keys, Redis, Blob, Anthropic, **QStash Tokens**).
     *   Add them via the Vercel project dashboard (do *not* commit to Git).
 6.  **[ ] Deployment Process:**
     *   Push code to Git (GitHub/GitLab/Bitbucket).
@@ -182,9 +210,9 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
     *   Add Environment Variables in Vercel UI.
     *   Trigger deployment.
 7.  **[ ] Testing and Iteration:**
-    *   Test the `*.vercel.app` deployment URL end-to-end.
+    *   Test the `*.vercel.app` deployment URL end-to-end, **specifically the image upload -> QStash -> worker flow**.
     *   Check API calls, Instacart integration, error handling.
-    *   Use Vercel logs for debugging.
+    *   Use Vercel logs and **Upstash QStash console** for debugging.
 
 ## Testing Strategy & Evals
 
@@ -194,6 +222,7 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
     *   Backend API Payload (sent to Instacart).
     *   Generated Instacart List (screenshots/manual notes).
 *   **[ ] Manual Evaluation (Iterative):** As P0 fixes are implemented, re-run the test set and evaluate against the baseline using these metrics:
+    *   **Job Completion:** Does the processing complete successfully via QStash without getting stuck? (Yes/No)
     *   **Consolidation:** Are duplicates correctly merged in the API payload? (Yes/No)
     *   **Unit Normalization:** Is the normalized unit in the API payload appropriate and purchasable? (Score: Good/Acceptable/Bad per item)
     *   **Quantity Normalization:** Is the quantity reasonable after normalization? (Score: Good/Acceptable/Bad per item)
@@ -201,23 +230,25 @@ Steps to deploy the application to Vercel for Demo Day accessibility.
     *   **Instacart List - Variant Match:** Is the matched item the correct *type* (dried vs fresh, whole vs minced)? (% correct variant)
     *   **Instacart List - Completeness:** Are there unexpected missing or added items? (Count)
     *   **UI/Error Feedback:** Does the UI clearly show progress, success, and handle errors gracefully? (Qualitative check)
-*   **[ ] Goal:** Aim for high scores (>80-90%) on Item Match and Variant Match for the test set, with clear UI feedback for all scenarios before the demo.
+*   **[ ] Goal:** Aim for **100% job completion** via QStash and high scores (>80-90%) on Item Match and Variant Match for the test set, with clear UI feedback for all scenarios before the demo.
 
 **Execution Plan (Revised):**
 
-1.  ~~Backend Refactor (Multi-Unit): Modify Stage 2 LLM prompt and post-processing...~~ (DONE)
-2.  ~~Backend Refactor (Consolidation): Implement the revised hybrid approach ('LLM for Factors, Algo for Math') in `/api/create-list`.~~ (DONE)
-3.  ~~Frontend Update (Multi-Unit): Adjust `displayReviewList`, `handleSendToInstacart`...~~ (DONE)
-4.  ~~Implement Asynchronous Processing Backend: Split image processing across multiple functions (`/api/process-image`, `/api/process-text`) to avoid timeouts.~~ (DONE)
-5.  ~~Troubleshoot Async Trigger & LLM Parsing: Added backend logging, refined LLM prompts, improved JSON parsing robustness, increased `max_tokens`.~~ (DONE)
-6.  ~~Enhance Frontend Feedback (P0): Updated status messages (map internal states, remove attempt counter).~~ (DONE)
-7. ~~Enhance Frontend Error Handling (P0): Display user-friendly error messages from backend job status polling.~~ (DONE)
-8.  ~~Address Stuck Processing (Frontend Fallback - P0/P1): Implemented frontend timeout logic with specific error message for `vision_completed` state.~~ (DONE)
-9.  **Polish UI/UX (P1):** Simplify pantry text, refine layout. Deploy & Test.
-10. **Implement Individual Timeout Handling (P0/P1 - Required UX):** Modify frontend to allow dismissing/retrying single timed-out recipe cards.
-11. **Final Demo Run-through.**
-12. **Refactor Backend Codebase (P1):** Execute the modularization plan (routes, controllers, services, utils).
-13. **Final Demo Run-through (Post-Refactor).**
+1.  **Implement QStash Migration (P0):**
+    *   Add dependency.
+    *   Configure Env Vars (locally and on Vercel).
+    *   Modify `/api/process-image` to publish to QStash.
+    *   Create `/api/process-text-worker` (controller/route) with QStash verification and migrated logic.
+    *   Configure QStash topic in Upstash Console.
+    *   Cleanup old `/api/process-text` endpoint and `fetchWithRetry`.
+    *   Test the new flow thoroughly.
+2.  **Review & Refine Backend Unit Normalization (P0/P1):** Address herb/wine/other specific normalization issues in `/api/create-list`.
+3.  **Implement Individual Timeout Handling (P0 Required UX):** Modify frontend to allow dismissing/retrying single timed-out recipe cards.
+4.  **Polish UI/UX (P1):** Simplify pantry text, refine layout. Deploy & Test.
+5.  **Final Demo Run-through.**
+6.  **Refactor Backend Codebase (P1):** Execute the modularization plan.
+7.  **Final Demo Run-through (Post-Refactor).**
+
 
 ---
 
