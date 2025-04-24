@@ -1,7 +1,6 @@
 const heicConvert = require('heic-convert');
 const { redis } = require('../services/redisService');
 const { visionClient } = require('../services/googleVisionService');
-const { processImageWithVision, convertHeicToJpegIfNeeded } = require('../services/visionService');
 // Note: 'fetch' is globally available in recent Node versions, or use 'node-fetch' if needed.
 
 // Helper function for retrying fetch
@@ -88,46 +87,58 @@ async function handleProcessImage(req, res) {
         console.log(`[Process Image Job ${jobId}] Image downloaded. Size: ${imageBuffer.length} bytes.`);
         // --------------------------------
 
-        // --- Convert HEIC/HEIF if needed ---
+        // --- Convert HEIC/HEIF if needed (Inline Logic) ---
         const lowerFilename = (originalFilename || '').toLowerCase();
-        let convertedImageBuffer = null;
+        let imageToSendToVision = imageBuffer; // Start with original buffer
         if (lowerFilename.endsWith('.heic') || lowerFilename.endsWith('.heif')) {
             console.log(`[Process Image Job ${jobId}] HEIC/HEIF file detected, attempting conversion...`);
             try {
-                convertedImageBuffer = await convertHeicToJpegIfNeeded(imageBuffer);
+                // Use heicConvert directly
+                const convertedBuffer = await heicConvert({
+                    buffer: imageBuffer, 
+                    format: 'JPEG', 
+                    quality: 0.9 
+                });
+                imageToSendToVision = convertedBuffer; // Use converted buffer if successful
                 console.log(`[Process Image Job ${jobId}] Successfully converted HEIC to JPEG.`);
             } catch (conversionError) {
                 console.error(`[Process Image Job ${jobId}] HEIC conversion failed:`, conversionError);
-                // Decide how to handle: fail job or try Vision with original?
-                // For now, let's fail the job if conversion fails.
-                throw new Error(`HEIC/HEIF conversion failed: ${conversionError.message}`);
+                // If conversion fails (e.g., not a HEIC), maybe still try Vision with original?
+                // For now, let's fail the job as before if conversion throws unexpected error
+                if (conversionError.message.includes('Input buffer is not') || conversionError.message.includes('Could not find \'ftyp\' box')) {
+                     console.warn(`[Process Image Job ${jobId}] Not a HEIC file or known conversion issue, proceeding with original buffer.`);
+                     // imageToSendToVision remains the original imageBuffer
+                } else {
+                    // Re-throw other unexpected conversion errors
+                    throw new Error(`HEIC/HEIF conversion failed: ${conversionError.message}`);
+                }
             }
         }
-        const imageToSendToVision = convertedImageBuffer || imageBuffer;
         // -------------------------------------
 
-        // --- Google Cloud Vision API Call ---
+        // --- Google Cloud Vision API Call (Inline Logic) ---
         console.log(`[Process Image Job ${jobId}] Calling Google Cloud Vision API... (Timestamp: ${Date.now()})`);
-        const visionStartTime = Date.now(); // Start timer
+        const visionStartTime = Date.now();
         if (!visionClient) {
            console.error(`[Process Image Job ${jobId}] Vision client is not initialized!`);
            throw new Error('Vision client failed to initialize. Cannot call Vision API.');
         }
         let extractedText = '';
         try {
+            // Use visionClient directly
             const [result] = await visionClient.textDetection({
-                image: { content: imageToSendToVision },
+                image: { content: imageToSendToVision }, // Use potentially converted buffer
             });
             const detections = result.textAnnotations;
             extractedText = detections && detections.length > 0 ? detections[0].description : '';
-            const visionEndTime = Date.now(); // End timer
+            const visionEndTime = Date.now();
             const visionDuration = visionEndTime - visionStartTime;
-            console.log(`[Process Image Job ${jobId}] Successfully extracted text from Vision API. Length: ${extractedText.length}. Duration: ${visionDuration}ms. (Timestamp: ${Date.now()})`);
+            console.log(`[Process Image Job ${jobId}] Successfully extracted text from Vision API. Length: ${extractedText.length}. Duration: ${visionDuration}ms. (Timestamp: ${visionEndTime})`); // Use visionEndTime
         } catch (visionError) {
              console.error(`[Process Image Job ${jobId}] Google Vision API call failed:`, visionError);
              const failedData = { ...jobData, status: 'failed', error: 'Could not read text from the image.', finishedAt: Date.now() };
-             await redis.set(jobId, JSON.stringify(failedData)); // Use redis.set
-             throw visionError;
+             await redis.set(jobId, JSON.stringify(failedData));
+             throw visionError; // Re-throw to be caught by outer catch
         }
         // ---------------------------------------------------------
 
