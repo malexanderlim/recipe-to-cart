@@ -10,6 +10,135 @@ const axios = require('axios');
 const { parseAndCorrectJson } = require('../utils/jsonUtils');
 const { callAnthropic } = require('../services/anthropicService');
 
+// ADDED: Helper map for unit abbreviations
+// --- MODIFIED --- Expanded unitAbbreviations based on Instacart Docs
+const unitAbbreviations = {
+    // Volume - Measured
+    'c': 'cup',
+    'cup': 'cup',
+    'cups': 'cup',
+    'fl oz': 'fluid ounce',
+    'fl. oz.': 'fluid ounce', // Added variation
+    'fluid ounce': 'fluid ounce',
+    'fluid ounces': 'fluid ounce',
+    'gal': 'gallon',
+    'gals': 'gallon',
+    'gallon': 'gallon',
+    'gallons': 'gallon',
+    'l': 'liter',
+    'liter': 'liter',
+    'liters': 'liter',
+    'litre': 'liter', // Instacart variation
+    'litres': 'liter', // Instacart variation
+    'ml': 'milliliter',
+    'mls': 'milliliter',
+    'milliliter': 'milliliter',
+    'millilitre': 'milliliter', // Instacart variation
+    'milliliters': 'milliliter',
+    'millilitres': 'milliliter', // Instacart variation
+    'pt': 'pint',
+    'pts': 'pint',
+    'pint': 'pint',
+    'pints': 'pint',
+    'qt': 'quart',
+    'qts': 'quart',
+    'quart': 'quart',
+    'quarts': 'quart',
+    'tb': 'tablespoon', // Instacart variation
+    'tbs': 'tablespoon', // Instacart variation
+    'tbsp': 'tablespoon',
+    'tbsps': 'tablespoon',
+    'tablespoon': 'tablespoon',
+    'tablespoons': 'tablespoon',
+    'ts': 'teaspoon', // Instacart variation
+    'tsp': 'teaspoon',
+    'tsps': 'teaspoon',
+    'tspn': 'teaspoon', // Instacart variation
+    'teaspoon': 'teaspoon',
+    'teaspoons': 'teaspoon',
+
+    // Weight - Weighed
+    'g': 'gram',
+    'gs': 'gram',
+    'gram': 'gram',
+    'grams': 'gram',
+    'kg': 'kilogram',
+    'kgs': 'kilogram',
+    'kilogram': 'kilogram',
+    'kilograms': 'kilogram',
+    'lb': 'pound',
+    'lbs': 'pound',
+    'pound': 'pound',
+    'pounds': 'pound',
+    'oz': 'ounce',
+    'ozs': 'ounce', // Added variation
+    'ounce': 'ounce',
+    'ounces': 'ounce',
+
+    // Countable
+    'bunch': 'bunch',
+    'bunches': 'bunch',
+    'can': 'can',
+    'cans': 'can',
+    'clove': 'clove', // Keep specific count units
+    'cloves': 'clove',
+    'ear': 'ear',
+    'ears': 'ear',
+    'each': 'each', // Explicitly map 'each'
+    'head': 'head',
+    'heads': 'head',
+    'package': 'package',
+    'packages': 'package',
+    'packet': 'packet', // From Instacart docs
+    'packets': 'packet',
+    'sprig': 'sprig', // Keep specific count units
+    'sprigs': 'sprig',
+    'slice': 'slice', // Common unit
+    'slices': 'slice',
+
+    // Descriptive sizes (map to 'each' or keep specific? Let's keep specific for now)
+    'large': 'large',
+    'lrg': 'large',
+    'lge': 'large',
+    'lg': 'large',
+    'medium': 'medium',
+    'med': 'medium',
+    'md': 'medium',
+    'small': 'small',
+    'sm': 'small',
+
+    // Note: Compound units like 'fl oz can', 'lb bag' are NOT handled here.
+    // We rely on the base unit ('fl oz', 'lb') and LLM context.
+};
+
+// ADDED: Function to get the canonical unit name
+// --- REVIEWED --- getCanonicalUnit - Logic seems okay with the expanded map
+// It prioritizes the map, then handles simple pluralization ('s') if the singular is a known canonical unit.
+// This should cover most cases from the Instacart docs.
+function getCanonicalUnit(rawUnit) {
+    if (!rawUnit) return null;
+    const lowerUnit = rawUnit.toLowerCase().trim();
+    
+    // Check abbreviation map first
+    if (unitAbbreviations[lowerUnit]) {
+        return unitAbbreviations[lowerUnit];
+    }
+    
+    // Simple singularization as fallback (if not in map)
+    // Check the plural first before trying singular
+    if (lowerUnit.endsWith('s') && !lowerUnit.endsWith('ss')) {
+         const singular = lowerUnit.slice(0, -1);
+         // Check if the singular form is a known canonical name (value in the map)
+         // OR if the singular form itself is a key in the map (e.g. 'cup')
+         if (Object.values(unitAbbreviations).includes(singular) || unitAbbreviations[singular]) {
+             return singular === 'cup' ? 'cup' : (unitAbbreviations[singular] || singular); // Handle 'cups' -> 'cup' specifically
+         }
+    }
+    
+    // Return original (lowercase) if not an abbreviation and not recognized as plural of a canonical unit
+    return lowerUnit;
+}
+
 /**
  * V7: Single LLM call for normalization & conversions, algorithm for math
  * This is the refactored endpoint based on the revised hybrid plan
@@ -52,17 +181,58 @@ async function createList(req, res) {
         
         // Construct prompt for LLM (for both quantities and descriptions)
         const systemPrompt = `
-            You are an expert ingredient normalizer for grocery lists. Given a list of raw ingredients, standardize them and provide conversion rates between different units.
+            You are an expert ingredient normalizer for grocery lists, preparing data for platforms like Instacart.
+            Given a list of raw ingredients, standardize them and provide conversion rates between different units.
 
-            For EACH unique ingredient concept (e.g., "garlic" whether it appears as "cloves of garlic", "garlic cloves", etc.), output:
-            1. normalized_name: A canonical, singular form of the ingredient
-            2. primary_unit: The most common purchasable unit (e.g., "head" for garlic, "bunch" for herbs, "can" for tomatoes)
-            3. equivalent_units: Array of objects with unit name and conversion factor FROM primary TO this unit.
+            For EACH unique ingredient concept (e.g., "garlic" includes "cloves of garlic", "garlic cloves"), output:
+            1. normalized_name: A canonical, singular form. **Crucially, preserve important distinctions.** Do NOT over-generalize (e.g., "ground beef" -> "ground beef", not "beef"; "chicken breast" -> "chicken breast", not "chicken").
+            2. primary_unit: The most common **purchasable** unit, following Instacart conventions (e.g., "pound" or "ounce" for meats, "head" for lettuce, "bunch" for carrots/herbs, "can" for canned goods, "each" for countable items like tomatoes/onions/avocados). Use lowercase.
+            3. equivalent_units: Array of objects with unit name (lowercase) and conversion factor FROM the primary unit TO this unit.
 
-            The equivalent_units must include conversion factors FROM the primary unit TO each equivalent unit.
-            Example: For garlic, if primary_unit is "head", then the factor for "clove" is 10.0, meaning 1 head = 10 cloves.
+            The equivalent_units array MUST include:
+            - The primary unit itself (factor_from_primary: 1).
+            - Conversions for relevant units commonly used by Instacart:
+                - **Weight:** Include 'pound', 'lb', 'ounce', 'oz', 'gram', 'g', 'kilogram', 'kg'.
+                - **Volume:** Include 'cup', 'c', 'fluid ounce', 'fl oz', 'tablespoon', 'tbsp', 'tbs', 'teaspoon', 'tsp', 'ts', 'milliliter', 'ml', 'liter', 'l', 'pint', 'pt', 'quart', 'qt', 'gallon', 'gal'.
+                - **Count:** Include 'each', 'bunch', 'can', 'head', 'package', 'packet', 'ear', 'clove', 'sprig', 'slice', 'large', 'medium', 'small'.
+            - Provide factors for BOTH full unit names AND common abbreviations where applicable (e.g., include both 'pound' and 'lb' if they are relevant).
+            - Ensure factors are accurate (e.g., 1 pound = 16 ounces, 1 cup = 16 tablespoons, 1 tablespoon = 3 teaspoons). Use null factor only if conversion is truly impossible or nonsensical.
 
-            Return ONLY a JSON array of objects with these exact keys. No explanation.`;
+            Example for 'ground beef':
+            {
+                "normalized_name": "ground beef",
+                "primary_unit": "pound", // Common purchasable unit
+                "equivalent_units": [
+                    { "unit": "pound", "factor_from_primary": 1 },
+                    { "unit": "lb", "factor_from_primary": 1 },
+                    { "unit": "ounce", "factor_from_primary": 16 },
+                    { "unit": "oz", "factor_from_primary": 16 },
+                    { "unit": "gram", "factor_from_primary": 453.592 },
+                    { "unit": "g", "factor_from_primary": 453.592 },
+                    { "unit": "kilogram", "factor_from_primary": 0.453592 },
+                    { "unit": "kg", "factor_from_primary": 0.453592 },
+                    { "unit": "package", "factor_from_primary": 1 } // Often sold in 1lb packages
+                ]
+            }
+
+            Example for 'tomato':
+            {
+                "normalized_name": "tomato",
+                "primary_unit": "each", // Instacart recommended for countables
+                "equivalent_units": [
+                    { "unit": "each", "factor_from_primary": 1 },
+                    { "unit": "pound", "factor_from_primary": 0.4 }, // Approx weight
+                    { "unit": "lb", "factor_from_primary": 0.4 },
+                    { "unit": "ounce", "factor_from_primary": 6.4 }, // Approx weight
+                    { "unit": "oz", "factor_from_primary": 6.4 },
+                    { "unit": "gram", "factor_from_primary": 180 }, // Approx weight
+                    { "unit": "g", "factor_from_primary": 180 },
+                    { "unit": "cup", "factor_from_primary": 0.75 } // Approx chopped
+                ]
+            }
+
+            Return ONLY a valid JSON array of objects with these exact keys. No explanation. Ensure units are lowercase.
+        `;
 
         const userPrompt = `
             Ingredient List:
@@ -237,64 +407,75 @@ async function createList(req, res) {
             console.log(`    V7 Mapped to normalizedName: ${normalizedName}`);
             
             const conversionData = conversionMap.get(normalizedName);
-            let rawUnit = rawItem.unit ? rawItem.unit.toLowerCase().trim() : null;
-
+            // --- MODIFIED --- Get canonical unit using helper
+            const canonicalRawUnit = getCanonicalUnit(rawItem.unit); 
+            // console.log(`    Raw Unit: '${rawItem.unit}', Canonical Unit: '${canonicalRawUnit}'`); // Optional debug log
+            
             // V7: Refined fallback/error handling during consolidation
             if (!conversionData) {
-                console.warn(`V7: No conversion data for '${normalizedName}'. Adding raw: ${rawQuantity} ${rawUnit || '(no unit)'}.`);
+                console.warn(`V7: No conversion data for '${normalizedName}'. Adding raw: ${rawQuantity} ${canonicalRawUnit || '(no unit)'}.`);
                 if (!consolidatedTotals[normalizedName]) consolidatedTotals[normalizedName] = { units: {}, failed: true }; // Mark as failed
-                 const unitToAdd = rawUnit || 'unknown_unit'; 
+                 const unitToAdd = canonicalRawUnit || 'unknown_unit'; 
                  consolidatedTotals[normalizedName].units[unitToAdd] = (consolidatedTotals[normalizedName].units[unitToAdd] || 0) + rawQuantity;
                 continue;
             }
 
-            const primaryUnit = conversionData.primaryUnit;
-            const eqUnitsMap = conversionData.equivalentUnits;
+            const primaryUnit = conversionData.primaryUnit; // Already lowercase from map build
+            const eqUnitsMap = conversionData.equivalentUnits; // Keys are already lowercase from map build
             let quantityInPrimary = 0;
             let conversionSuccessful = false;
 
-            if (!rawUnit) {
+            // --- MODIFIED --- Use canonicalRawUnit for checks below
+            if (!canonicalRawUnit) { 
                 if (primaryUnit === 'each') { 
                      quantityInPrimary = rawQuantity;
                      conversionSuccessful = true;
                      console.log(`  V7: ${rawItem.ingredient} - Assuming unitless as primary unit 'each'`);
                 } else if (eqUnitsMap.has('leaf') && normalizedName.includes('leaf')) {
-                    rawUnit = 'leaf'; // Treat as leaf and proceed to lookup below
-                     console.log(`  V7: ${rawItem.ingredient} - Treating unitless as 'leaf' for conversion attempt.`);
+                    // If unitless and name includes leaf, assume 'leaf' canonical unit
+                    if (eqUnitsMap.has('leaf')) { // Check if 'leaf' conversion exists
+                        const factorFromPrimary = eqUnitsMap.get('leaf');
+                         if (factorFromPrimary != null && factorFromPrimary > 0) {
+                            const factorToPrimary = 1.0 / factorFromPrimary;
+                            quantityInPrimary = rawQuantity * factorToPrimary;
+                            conversionSuccessful = true;
+                            console.log(`  V7: ${rawItem.ingredient} - Converted unitless (as leaf) to ${quantityInPrimary.toFixed(3)} ${primaryUnit}`);
+                        } else {
+                             console.warn(`  V7: Unitless '${rawItem.ingredient}' assumed 'leaf', but invalid conversion factor found.`);
+                        }
+                    } else {
+                         console.warn(`  V7: Unitless '${rawItem.ingredient}' assumed 'leaf', but no 'leaf' conversion factor provided by LLM.`);
+                    }
                 } else {
                     console.warn(`  V7: Cannot convert unitless '${rawItem.ingredient}' to primary unit '${primaryUnit}'. Adding raw.`);
                     // Keep track of raw quantity if conversion fails
                 }
-            }
-
-            if (rawUnit && !conversionSuccessful) { // Attempt conversion only if needed and not already handled
-                if (rawUnit === primaryUnit) {
+            } else { // Attempt conversion if canonicalRawUnit exists
+                if (canonicalRawUnit === primaryUnit) {
                     quantityInPrimary = rawQuantity;
                     conversionSuccessful = true;
                 } else {
-                    let factorFromPrimary = null;
-                    const singularRawUnit = rawUnit.endsWith('s') && !rawUnit.endsWith('ss') ? rawUnit.slice(0, -1) : null; 
-                    
-                    if (eqUnitsMap.has(rawUnit)) {
-                        factorFromPrimary = eqUnitsMap.get(rawUnit);
-                    } else if (singularRawUnit && eqUnitsMap.has(singularRawUnit)) { 
-                        factorFromPrimary = eqUnitsMap.get(singularRawUnit);
-                        console.log(`  V7: Matched plural raw unit '${rawUnit}' to singular map key '${singularRawUnit}' for ${normalizedName}`);
-                    }
-                    
-                    if (factorFromPrimary != null && factorFromPrimary > 0) {
-                        const factorToPrimary = 1.0 / factorFromPrimary;
-                        quantityInPrimary = rawQuantity * factorToPrimary;
-                        conversionSuccessful = true;
-                        console.log(`  V7: Converted ${rawQuantity} ${rawUnit} of ${normalizedName} to ${quantityInPrimary.toFixed(3)} ${primaryUnit}`);
+                    // --- MODIFIED --- Lookup canonicalRawUnit directly in the map
+                    if (eqUnitsMap.has(canonicalRawUnit)) { 
+                        const factorFromPrimary = eqUnitsMap.get(canonicalRawUnit);
+                        
+                        if (factorFromPrimary != null && factorFromPrimary > 0) {
+                            const factorToPrimary = 1.0 / factorFromPrimary;
+                            quantityInPrimary = rawQuantity * factorToPrimary;
+                            conversionSuccessful = true;
+                            console.log(`  V7: Converted ${rawQuantity} ${rawItem.unit} (as ${canonicalRawUnit}) of ${normalizedName} to ${quantityInPrimary.toFixed(3)} ${primaryUnit}`);
+                        } else {
+                             console.warn(`  V7: Unit '${rawItem.unit}' (canonical: ${canonicalRawUnit}) found in map for ${normalizedName}, but factor is invalid (${factorFromPrimary}). Adding raw.`);
+                        }
                     } else {
-                        console.warn(`  V7: Unit '${rawUnit}' (or singular) not found/invalid factor for ${normalizedName}. Cannot convert to primary '${primaryUnit}'. Adding raw.`);
+                        console.warn(`  V7: Unit '${rawItem.unit}' (canonical: ${canonicalRawUnit}) not found in equivalent units map for ${normalizedName} (primary: ${primaryUnit}). Adding raw.`);
+                        // console.log(`    Available units for ${normalizedName}:`, Array.from(eqUnitsMap.keys())); // Debugging: Show available keys
                     }
                 }
             }
             
             // Accumulate totals
-            if (!consolidatedTotals[normalizedName]) consolidatedTotals[normalizedName] = { units: {}, primaryUnit: primaryUnit }; // Store primary unit
+            if (!consolidatedTotals[normalizedName]) consolidatedTotals[normalizedName] = { units: {}, primaryUnit: primaryUnit }; 
 
             if (conversionSuccessful) {
                 consolidatedTotals[normalizedName].units[primaryUnit] = (consolidatedTotals[normalizedName].units[primaryUnit] || 0) + quantityInPrimary;
@@ -313,7 +494,8 @@ async function createList(req, res) {
                 });
             } else {
                  // Add raw quantity if conversion failed
-                 const unitToAdd = rawUnit || 'unknown_unit';
+                 // --- MODIFIED --- Use canonicalRawUnit for the key
+                 const unitToAdd = canonicalRawUnit || 'unknown_unit'; 
                  consolidatedTotals[normalizedName].units[unitToAdd] = (consolidatedTotals[normalizedName].units[unitToAdd] || 0) + rawQuantity;
                  consolidatedTotals[normalizedName].failed = true; // Mark that at least one conversion failed
             }
@@ -324,34 +506,40 @@ async function createList(req, res) {
         // --- Step 3: Final Adjustments & Formatting ---
         console.log("V7 Step 3: Applying final adjustments...");
         const finalAdjustedItems = [];
-        const countableUnits = ['bunch', 'can', 'head', 'each', 'large', 'medium', 'small', 'package', 'pint'];
+        // --- MODIFIED --- Use canonical names from our map for Instacart alignment
+        const countableUnits = ['bunch', 'can', 'head', 'each', 'large', 'medium', 'small', 'package', 'packet', 'pint', 'clove', 'sprig', 'ear', 'slice'];
         const freshHerbs = ['basil', 'thyme', 'mint', 'parsley', 'cilantro', 'rosemary', 'dill', 'oregano'];
 
         for (const normalizedName in consolidatedTotals) {
             const itemData = consolidatedTotals[normalizedName];
             const measurements = itemData.units;
-            const primaryUnit = itemData.primaryUnit || Object.keys(measurements)[0] || 'each'; // Use stored primary or fallback
+            // Primary unit determined by LLM (now guided by Instacart conventions)
+            const primaryUnit = itemData.primaryUnit || Object.keys(measurements)[0] || 'each';
             let finalMeasurements = [];
 
             for (const [unit, quantity] of Object.entries(measurements)) {
                 if (quantity <= 0 || unit === 'unknown_unit') continue; // Skip zero/negative/unknown
                 
                 let adjustedQuantity = quantity;
+                // --- MODIFIED --- Use the expanded countableUnits list
                 const isCountable = countableUnits.includes(unit);
                 const isHerb = freshHerbs.some(herb => normalizedName.includes(herb));
 
-                // Adjustment 1: Round up countable units
+                // Adjustment 1: Round up countable units (using expanded list)
                 if (isCountable) {
                     const rounded = Math.ceil(adjustedQuantity);
                     if (rounded > adjustedQuantity) {
                          console.log(`  Adjusting ${normalizedName} ${unit}: ${adjustedQuantity.toFixed(3)} -> ${rounded} (Ceiling)`);
                          adjustedQuantity = rounded;
                     }
-                    adjustedQuantity = Math.max(1, Math.round(adjustedQuantity)); 
+                    // Ensure minimum 1 after rounding if it was originally > 0
+                    if (quantity > 0) {
+                         adjustedQuantity = Math.max(1, adjustedQuantity); 
+                    }
                 }
 
-                // Adjustment 2: Minimum 1 for fresh herbs in bunch/package
-                 if (isHerb && (unit === 'bunch' || unit === 'package') && adjustedQuantity > 0 && adjustedQuantity < 1) {
+                // Adjustment 2: Minimum 1 for fresh herbs in bunch/package/sprig
+                 if (isHerb && (unit === 'bunch' || unit === 'package' || unit === 'sprig') && adjustedQuantity > 0 && adjustedQuantity < 1) {
                      console.log(`  Adjusting ${normalizedName} ${unit}: ${adjustedQuantity.toFixed(3)} -> 1 (Herb Minimum)`);
                      adjustedQuantity = 1; 
                  }
@@ -359,9 +547,13 @@ async function createList(req, res) {
                  // Ensure reasonable precision for non-countable
                  if (!isCountable) adjustedQuantity = parseFloat(adjustedQuantity.toFixed(2));
                  
+                 // Prevent zeroing out tiny quantities after rounding
                  if (quantity > 0 && adjustedQuantity <= 0) adjustedQuantity = 0.01; 
 
                  if (adjustedQuantity > 0) {
+                    // The 'unit' here comes directly from the keys of `consolidatedTotals[normalizedName].units`.
+                    // These keys were populated using `getCanonicalUnit` or the LLM's `primaryUnit`,
+                    // which should now align with our expanded `unitAbbreviations` map and Instacart terms.
                     finalMeasurements.push({ unit, quantity: adjustedQuantity });
                  }
             }
