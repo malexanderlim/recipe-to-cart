@@ -1184,17 +1184,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             if (url) {
-                // Validation Check
+                // Auto-heal: Prepend https:// if protocol is missing
                 if (!url.toLowerCase().startsWith('http://') && !url.toLowerCase().startsWith('https://')) {
-                    console.log('URL validation failed:', url);
-                    if (urlErrorMessageDiv) {
-                         urlErrorMessageDiv.textContent = 'Please enter a full URL including http:// or https://';
-                         urlErrorMessageDiv.style.display = 'block';
-                    }
-                    return; // Stop processing
+                    console.log('Protocol missing, prepending https:// to:', url);
+                    url = 'https://' + url;
                 }
                 
-                console.log('URL is valid, processing:', url);
+                console.log('Processing URL:', url);
                 processSingleUrl(url); // Call the function now defined inside
                 recipeUrlInput.value = ''; // Clear input after adding
             } else {
