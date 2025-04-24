@@ -23,6 +23,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // const yieldControlDiv = document.getElementById('servings-control'); 
     // ... (other single yield control vars removed)
 
+    // Ensure error message is hidden on load
+    if (errorMessageDiv) {
+        errorMessageDiv.style.display = 'none';
+    }
+    if (instacartErrorMessageDiv) {
+        instacartErrorMessageDiv.style.display = 'none';
+    }
+
     // State for multiple recipes
     let processedRecipes = []; // Array to store data for each recipe: { id, file, title, yield, ingredients, scaleFactor, error }
     let recipeCounter = 0; // Simple ID generator
@@ -219,7 +227,18 @@ document.addEventListener('DOMContentLoaded', () => {
         let ingredientsHTML = `<p>${displayStatus}</p>`; // Use mapped display status
         if (!isLoading) {
             if (recipeData.error) {
-                ingredientsHTML = `<p class="error">${recipeData.error}</p>`; // Use error class
+                let displayError = recipeData.error; // Default to the original error
+                // Check for the specific fallback error
+                if (displayError.includes('Fallback extraction failed: LLM returned no valid ingredients')) {
+                    const urlSnippet = recipeData.inputUrl ? ` at ${recipeData.inputUrl}` : '';
+                    displayError = `No recipe could be identified${urlSnippet}. Please check the URL and try again.`;
+                } else if (displayError.startsWith('Network error:') || displayError.startsWith('Upload Error:')) {
+                     // Keep network/upload errors as is for now, maybe shorten later
+                } else {
+                     // Optional: Prefix other errors for clarity
+                     displayError = `Error: ${displayError}`;
+                }
+                ingredientsHTML = `<p class="error">${displayError}</p>`; // Use error class
             } else if (recipeData.ingredients && recipeData.ingredients.length > 0) { // Check ingredients exist
                 // Render ingredients with checkboxes
                 ingredientsHTML = renderParsedIngredientsHTML(recipeData);
@@ -230,8 +249,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Use h3 for title in card
+        const displayTitle = isLoading ? "Processing Recipe..." : recipeData.title;
         recipeDiv.innerHTML = ` 
-            <h3>${recipeData.title}</h3>
+            <h3>${displayTitle}</h3>
             ${yieldControlsHTML}
             ${ingredientsHTML}
         `;
@@ -408,7 +428,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Renamed function: Handles getting the processed list from backend
     async function handleReviewList() { 
         if (!createListButton) return;
-        console.log("Review List button clicked. Processing recipes:", processedRecipes);
+        // --- Deduplicate processedRecipes --- 
+        const uniqueRecipeIds = new Set();
+        const uniqueProcessedRecipes = processedRecipes.filter(recipe => {
+            if (!uniqueRecipeIds.has(recipe.id)) {
+                uniqueRecipeIds.add(recipe.id);
+                return true;
+            }
+            return false;
+        });
+        console.log("Review List button clicked. Processing unique recipes:", uniqueProcessedRecipes);
+        // -----------------------------------
 
         setReviewLoadingState(true); // New loading state for review generation
         clearReviewAreaAndFinalLink(); // Clear previous review/link
@@ -416,7 +446,8 @@ document.addEventListener('DOMContentLoaded', () => {
         let allScaledIngredients = [];
         let validRecipeTitles = [];
 
-        processedRecipes.forEach(recipeData => {
+        // --- Use the deduplicated list --- 
+        uniqueProcessedRecipes.forEach(recipeData => {
             if (!recipeData.error && recipeData.ingredients.length > 0) {
                 let hasCheckedIngredients = false;
                 const scaledAndFiltered = recipeData.ingredients
@@ -477,6 +508,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // *** NEW: Display the returned processed list for review ***
             if (data.processedIngredients && data.originalTitle) {
+                // Make Section 3 visible
+                const finalListSection = document.getElementById('final-list-section');
+                if (finalListSection) {
+                    finalListSection.style.display = 'block';
+                }
+                // Hide the loading indicator for the review button itself
+                setReviewLoadingState(false); 
+                // Display the list
                 displayReviewList(data.processedIngredients, data.originalTitle);
             } else {
                 throw new Error("Backend did not return the processed ingredient list.");
@@ -485,21 +524,19 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Error getting processed list for review:', error);
             displayReviewError(`Failed to generate list for review: ${error.message}`);
-        } finally {
+            // Ensure loading state is false on error too
             setReviewLoadingState(false);
         }
     }
 
     // --- NEW: Function to display the review list ---
     function displayReviewList(ingredients, originalTitle) {
-        if (!reviewListArea) return;
+        console.log("[displayReviewList] Received ingredients:", JSON.parse(JSON.stringify(ingredients))); // Log deep copy
+        if (!reviewListArea) {
+            console.error("[displayReviewList] reviewListArea element not found!");
+            return;
+        }
         reviewListArea.innerHTML = ''; // Clear previous content
-        reviewListArea.style.display = 'block'; // Make visible
-
-        const heading = document.createElement('h2'); // Use H2 for consistency
-        // Ensure correct numbering
-        heading.textContent = '3. Review Final List'; 
-        reviewListArea.appendChild(heading);
 
         // Add helper text for review section
         const reviewHelper = document.createElement('p');
@@ -508,74 +545,104 @@ document.addEventListener('DOMContentLoaded', () => {
         reviewListArea.appendChild(reviewHelper);
 
         if (!ingredients || ingredients.length === 0) {
+            console.warn("[displayReviewList] No ingredients to display.");
             reviewListArea.innerHTML += '<p>No ingredients generated after consolidation.</p>';
             return;
         }
 
         const list = document.createElement('ul');
         list.classList.add('review-ingredient-list'); 
+        console.log("[displayReviewList] Created UL element.");
 
         // ingredients is now expected to be [{name: ..., line_item_measurements: [{unit, quantity}, ...]}, ...]
-        ingredients.forEach((item, index) => {
-            const li = document.createElement('li');
-            li.classList.add('ingredient-item'); 
-            
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.id = `review-ingredient-${index}`;
-            checkbox.checked = true; 
-            checkbox.dataset.itemData = JSON.stringify(item); 
-            
-            // --- Display Primary Measurement (with fixes) --- 
-            let displayText = 'Error: No measurement found';
-            let primaryMeasurement = null;
-
-            if (item.line_item_measurements && item.line_item_measurements.length > 0) {
-                // **FIX 1: Prioritize 'each' (head) for garlic display**
-                if (item.name === 'garlic') {
-                    primaryMeasurement = item.line_item_measurements.find(m => m.unit === 'each' || m.unit === 'head');
-                }
-                // If not garlic or 'each' not found for garlic, use the first measurement
-                if (!primaryMeasurement) {
-                    primaryMeasurement = item.line_item_measurements[0]; 
-                }
-
-                // **FIX 2: Avoid duplicating name if unit contains it (Revised)**
-                const quantityStr = primaryMeasurement.quantity;
-                const unitStr = primaryMeasurement.unit || '';
-                const nameStr = item.name || '';
-
-                // Stricter Check V2: Check if unit string *ends with* the name string, ignoring case.
-                // This handles "fresh thyme sprigs" vs "thyme" better than includes().
-                const unitLower = unitStr.toLowerCase();
-                const nameLower = nameStr.toLowerCase();
-                // Also check if unit is just the plural of name (e.g. unit='bay leaves', name='bay leaf')
-                const isPluralOfName = unitLower.endsWith('s') && unitLower.slice(0, -1) === nameLower;
+        try {
+            ingredients.forEach((item, index) => {
+                console.log(`[displayReviewList] Processing item ${index}:`, JSON.parse(JSON.stringify(item)));
+                const li = document.createElement('li');
+                li.classList.add('ingredient-item'); 
                 
-                if (unitLower.endsWith(nameLower) || isPluralOfName) {
-                    displayText = `${quantityStr} ${unitStr}`.trim();
-                     // Add console log for debugging this specific case
-                    console.log(`Herb Check: Unit '${unitStr}' contained name '${nameStr}' or was plural. Display: '${displayText}'`);
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `review-ingredient-${index}`;
+                checkbox.checked = true; 
+                try {
+                    checkbox.dataset.itemData = JSON.stringify(item);
+                } catch (stringifyError) {
+                    console.error(`[displayReviewList] Error stringifying item data for index ${index}:`, stringifyError, item);
+                    // Skip this item if data can't be stored
+                    return; 
+                }
+                
+                // --- Display Primary Measurement (with fixes) --- 
+                let displayText = 'Error: Could not determine display text'; // Default error message
+                let primaryMeasurement = null;
+
+                if (item.line_item_measurements && item.line_item_measurements.length > 0) {
+                    // **FIX 1: Prioritize 'each' (head) for garlic display**
+                    if (item.name === 'garlic') {
+                        primaryMeasurement = item.line_item_measurements.find(m => m.unit === 'each' || m.unit === 'head');
+                    }
+                    // If not garlic or 'each' not found for garlic, use the first measurement
+                    if (!primaryMeasurement) {
+                        primaryMeasurement = item.line_item_measurements[0]; 
+                    }
+                    console.log(`[displayReviewList] Item ${index} - Primary Measurement:`, primaryMeasurement);
+
+                    // **FIX 2: Avoid duplicating name if unit contains it (Revised)**
+                    // Ensure primaryMeasurement and its quantity are valid before proceeding
+                    if (primaryMeasurement && typeof primaryMeasurement.quantity !== 'undefined' && primaryMeasurement.quantity !== null) {
+                        const quantityStr = primaryMeasurement.quantity; // Keep as number for now
+                        const unitStr = primaryMeasurement.unit || '';
+                        const nameStr = item.name || '';
+
+                        // Stricter Check V2: Check if unit string *ends with* the name string, ignoring case.
+                        // This handles "fresh thyme sprigs" vs "thyme" better than includes().
+                        const unitLower = unitStr.toLowerCase();
+                        const nameLower = nameStr.toLowerCase();
+                        // Also check if unit is just the plural of name (e.g. unit='bay leaves', name='bay leaf')
+                        const isPluralOfName = unitLower.endsWith('s') && unitLower.slice(0, -1) === nameLower;
+                        
+                        if (unitLower.endsWith(nameLower) || isPluralOfName) {
+                            displayText = `${quantityStr} ${unitStr}`.trim();
+                            // Add console log for debugging this specific case
+                            // console.log(`Herb Check: Unit '${unitStr}' contained name '${nameStr}' or was plural. Display: '${displayText}'`);
+                        } else {
+                            displayText = `${quantityStr} ${unitStr} ${nameStr}`.replace(/\s+/g, ' ').trim();
+                        }
+                    } else {
+                         console.warn(`[displayReviewList] Item ${index} - Missing quantity in primary measurement:`, primaryMeasurement);
+                         displayText = ` ${item.name || 'Unknown Item'} (Quantity Error)`;
+                    }
+                    
                 } else {
-                    displayText = `${quantityStr} ${unitStr} ${nameStr}`.replace(/\s+/g, ' ').trim();
+                     console.warn(`[displayReviewList] Item ${index} - Missing line_item_measurements.`);
+                    // Fallback if no measurements
+                    displayText = ` ${item.name || 'Unknown Item'} (Measurement Error)`; 
                 }
+                console.log(`[displayReviewList] Item ${index} - Generated displayText:`, displayText);
+                // ----------------------------------
+
+                const label = document.createElement('label');
+                label.htmlFor = `review-ingredient-${index}`;
+                label.textContent = displayText;
                 
-            } else {
-                // Fallback if no measurements
-                displayText = ` ${item.name} (Check units/quantity)`; 
-            }
-            // ----------------------------------
+                console.log(`[displayReviewList] Item ${index} - Appending checkbox and label to LI.`);
+                li.appendChild(checkbox);
+                li.appendChild(label);
 
-            const label = document.createElement('label');
-            label.htmlFor = `review-ingredient-${index}`;
-            label.textContent = displayText;
-            
-            li.appendChild(checkbox);
-            li.appendChild(label);
-            list.appendChild(li);
-        });
+                console.log(`[displayReviewList] Item ${index} - Appending LI to UL.`);
+                list.appendChild(li);
+            });
+            console.log("[displayReviewList] Finished forEach loop.");
+        } catch (loopError) {
+            console.error("[displayReviewList] Error during ingredients.forEach loop:", loopError);
+            // Display a general error message in the review area
+            reviewListArea.innerHTML += `<p class="error">An error occurred while building the review list item. Check the console for details.</p>`;
+        }
 
+        console.log("[displayReviewList] Appending UL to reviewListArea.");
         reviewListArea.appendChild(list);
+        console.log("[displayReviewList] UL appended.");
 
         // Add the "Send to Instacart" button
         const sendButton = document.createElement('button');
@@ -586,7 +653,9 @@ document.addEventListener('DOMContentLoaded', () => {
         sendButton.classList.add('instacart-link-button'); 
         sendButton.dataset.originalTitle = originalTitle; // Store title for later use
         sendButton.addEventListener('click', handleSendToInstacart);
+        console.log("[displayReviewList] Appending Send button.");
         reviewListArea.appendChild(sendButton);
+        console.log("[displayReviewList] Function finished.");
     }
 
     // --- NEW: Function to handle sending the final list ---
@@ -595,6 +664,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const originalTitle = sendButton.dataset.originalTitle;
         const reviewListCheckboxes = reviewListArea.querySelectorAll('.review-ingredient-list input[type="checkbox"]');
         
+        sendButton.disabled = true; // Disable button immediately
         setInstacartLoadingState(true); 
         clearInstacartResults(); 
 
@@ -643,10 +713,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             displayInstacartLink(data.instacartUrl);
+            // Success: Keep the create button disabled/hidden implicitly by not re-enabling
 
         } catch (error) {
             console.error('Error sending final list to Instacart:', error);
             displayInstacartError(`Failed to send list to Instacart: ${error.message}`);
+            // Error: Re-enable the button so user can retry
+            sendButton.disabled = false; 
         } finally {
             setInstacartLoadingState(false);
         }
@@ -682,7 +755,6 @@ document.addEventListener('DOMContentLoaded', () => {
     function clearReviewAreaAndFinalLink() {
         if (reviewListArea) {
             reviewListArea.innerHTML = '';
-            reviewListArea.style.display = 'none';
         }
          clearInstacartResults(); // Clear final link/error area too
     }
@@ -747,11 +819,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const instacartLoadingIndicator = document.getElementById('instacart-loading-indicator');
         const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
         const instacartLinkArea = document.getElementById('instacart-link-area');
-        // Update loading text
+        const sendButton = document.getElementById('send-to-instacart-button');
+
         if (instacartLoadingIndicator) { 
             instacartLoadingIndicator.textContent = isLoading ? 'Sending to Instacart...' : '';
             instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
         }
+        
+        // Manage button state based on loading
+        if (sendButton) {
+             sendButton.disabled = isLoading; // Disable while loading
+        }
+
         if (isLoading) {
             if (instacartErrorMessageDiv) {
                 instacartErrorMessageDiv.textContent = '';
@@ -764,24 +843,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     function displayInstacartError(message) {
         const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-        instacartErrorMessageDiv.textContent = message;
-        instacartErrorMessageDiv.style.display = 'block';
+        const sendButton = document.getElementById('send-to-instacart-button');
+        if(instacartErrorMessageDiv) {
+            instacartErrorMessageDiv.textContent = message;
+            instacartErrorMessageDiv.style.display = 'block';
+        }
+        // Re-enable button on error
+        if (sendButton) {
+             sendButton.disabled = false;
+        }
     }
     function clearInstacartResults() {
         const instacartLinkArea = document.getElementById('instacart-link-area');
         const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-        instacartLinkArea.innerHTML = '';
-        instacartErrorMessageDiv.textContent = '';
-        instacartErrorMessageDiv.style.display = 'none';
+        const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
+        
+        if(instacartLinkArea) instacartLinkArea.innerHTML = '';
+        if(instacartErrorMessageDiv) {
+            instacartErrorMessageDiv.textContent = '';
+            instacartErrorMessageDiv.style.display = 'none';
+        }
+        // Also ensure the button is visible/enabled when clearing results (e.g., before a new attempt)
+        if (sendButton) {
+            sendButton.style.display = 'inline-block'; // Ensure it's visible if it was hidden
+            sendButton.disabled = false; 
+        }
     }
     function displayInstacartLink(url) {
-        // --- Remove debugging logs --- 
-        // console.log("displayInstacartLink called with URL:", url);
         const instacartLinkArea = document.getElementById('instacart-link-area');
-        // if (!instacartLinkArea) { ... } // Keep check?
-        // console.log("Found instacartLinkArea element:", instacartLinkArea);
+        const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
+
+        if (!instacartLinkArea) return;
         
         instacartLinkArea.innerHTML = ''; // Clear previous links/messages
+
+        // Hide the "Create" button on success
+        if (sendButton) {
+            sendButton.style.display = 'none';
+        }
 
         // Add success message
         const successMsg = document.createElement('p');
@@ -795,9 +894,7 @@ document.addEventListener('DOMContentLoaded', () => {
         link.target = '_blank'; // Open in new tab
         link.classList.add('instacart-link-button'); // Add class for styling
         
-        // console.log("Appending link element:", link);
         instacartLinkArea.appendChild(link);
-        // console.log("Content of instacartLinkArea after append:", instacartLinkArea.innerHTML);
     }
 
     // --- Function to create and add the pantry checkbox --- 
@@ -971,8 +1068,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 recipeInfo.scaleFactor = 1; // Reset scale factor
                 recipeInfo.error = null; // Clear any previous error
                 
-                // *** Move completed data from map to array ***
-                processedRecipes.push(recipeInfo); // Add to final results array
+                // *** Move completed data from map to array - WITH DUPLICATE CHECK ***
+                if (!processedRecipes.some(r => r.id === recipeId)) {
+                    processedRecipes.push(recipeInfo); // Add to final results array
+                } else {
+                    console.warn(`[Polling ${jobId}] Duplicate completion detected for ${recipeId}. Ignoring.`);
+                }
                 // Remove from the map once processing is final
                 delete recipeData[recipeId];
                 // ****************************************************
@@ -990,8 +1091,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 stopPolling(recipeId); // Stop polling and timeout
                 recipeInfo.error = data.error || 'Processing failed.'; // Store the error
                 
-                // *** Move failed data from map to array for display ***
-                processedRecipes.push(recipeInfo); // Add to final results array
+                // *** Move failed data from map to array for display - WITH DUPLICATE CHECK ***
+                if (!processedRecipes.some(r => r.id === recipeId)) {
+                    processedRecipes.push(recipeInfo); // Add to final results array
+                } else {
+                    console.warn(`[Polling ${jobId}] Duplicate failure detected for ${recipeId}. Ignoring.`);
+                }
                 delete recipeData[recipeId]; // Remove from map
                 // ***********************************************************
 
@@ -1038,8 +1143,12 @@ document.addEventListener('DOMContentLoaded', () => {
              // Optional: Re-render immediately to show the error if needed
              // renderSingleRecipeResult(recipeInfo, false);
              
-             // *** Important: Move error data from map to array if stopping with error ***
-             processedRecipes.push(recipeInfo); // Add to final results array
+             // *** Important: Move error data from map to array if stopping with error - WITH DUPLICATE CHECK ***
+             if (!processedRecipes.some(r => r.id === recipeId)) {
+                 processedRecipes.push(recipeInfo); // Add to final results array
+             } else {
+                 console.warn(`[Polling Stop] Duplicate error handling detected for ${recipeId}. Ignoring.`);
+             }
              delete recipeData[recipeId]; // Remove from map
             // ***********************************************************
 
@@ -1062,28 +1171,46 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- URL Processing Logic moved inside DOMContentLoaded ---
     const addUrlButton = document.getElementById('addUrlButton');
     const recipeUrlInput = document.getElementById('recipeUrlInput');
+    const urlErrorMessageDiv = document.getElementById('url-error-message'); // Get the new error div
 
     if (addUrlButton && recipeUrlInput) {
-        addUrlButton.addEventListener('click', () => {
-            console.log('Add URL button clicked!');
-            const url = recipeUrlInput.value.trim();
+        const handleUrlSubmit = () => {
+            console.log('Attempting URL submit...');
+            let url = recipeUrlInput.value.trim(); // Changed const to let
+            // Clear previous error message
+            if(urlErrorMessageDiv) {
+                urlErrorMessageDiv.textContent = '';
+                urlErrorMessageDiv.style.display = 'none';
+            }
+            
             if (url) {
-                console.log('URL entered:', url);
+                // Auto-heal: Prepend https:// if protocol is missing
+                if (!url.toLowerCase().startsWith('http://') && !url.toLowerCase().startsWith('https://')) {
+                    console.log('Protocol missing, prepending https:// to:', url);
+                    url = 'https://' + url;
+                }
+                
+                console.log('Processing URL:', url);
                 processSingleUrl(url); // Call the function now defined inside
                 recipeUrlInput.value = ''; // Clear input after adding
             } else {
                 console.log('URL input was empty.');
-                alert('Please enter a valid URL.');
+                // Optionally show an error for empty input
+                // if (urlErrorMessageDiv) {
+                //     urlErrorMessageDiv.textContent = 'Please enter a URL.';
+                //     urlErrorMessageDiv.style.display = 'block';
+                // }
             }
-        });
-    }
-    // Add listener for pressing Enter in the URL input
-    if (recipeUrlInput) {
+        };
+
+        addUrlButton.addEventListener('click', handleUrlSubmit);
+
+        // Add listener for pressing Enter in the URL input
         recipeUrlInput.addEventListener('keypress', (event) => {
             if (event.key === 'Enter') {
                 console.log('Enter key pressed in URL input.');
                 event.preventDefault(); // Prevent default form submission if any
-                addUrlButton.click(); // Trigger the button click
+                handleUrlSubmit(); // Use the same handler
             }
         });
     }
@@ -1141,14 +1268,7 @@ document.addEventListener('DOMContentLoaded', () => {
                      console.error(`Recipe data for tempId ${tempId} not found after API call.`);
                 }
             } else {
-                const errorText = await response.text();
-                console.error(`Error starting URL processing job for ${tempId}: ${response.status} ${errorText}`);
-                const recipeInfo = recipeData[tempId]; // Get ref
-                if (recipeInfo) {
-                    recipeInfo.status = 'failed';
-                    recipeInfo.error = `Failed to start processing: ${response.status} ${errorText || 'Server error'}`;
-                    renderSingleRecipeResult(recipeInfo, false); 
-                }
+                throw new Error(`Unexpected response status: ${response.status}`);
             }
         } catch (error) {
             console.error(`Network or fetch error processing URL ${tempId}:`, error);
@@ -1159,9 +1279,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderSingleRecipeResult(recipeInfo, false); 
             }
         }
-    } // <<< Corrected closing brace for processSingleUrl
+    } // <<< Closing brace for processSingleUrl
 
-}); // <<< END OF DOMContentLoaded LISTENER
+}); // <<< RESTORED Closing brace for DOMContentLoaded listener
 
 // Keep existing globally defined functions like detectYield, displayImagePreview, etc., OUTSIDE DOMContentLoaded
 function detectYield(text) {
@@ -1222,24 +1342,55 @@ function setInstacartLoadingState(isLoading) {
     const instacartLoadingIndicator = document.getElementById('instacart-loading-indicator');
     const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
     const instacartLinkArea = document.getElementById('instacart-link-area');
-    instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
+    const sendButton = document.getElementById('send-to-instacart-button');
+
+    if (instacartLoadingIndicator) { 
+        instacartLoadingIndicator.textContent = isLoading ? 'Sending to Instacart...' : '';
+        instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
+    }
+    
+    // Manage button state based on loading
+    if (sendButton) {
+         sendButton.disabled = isLoading; // Disable while loading
+    }
+
     if (isLoading) {
-        instacartErrorMessageDiv.textContent = '';
-        instacartErrorMessageDiv.style.display = 'none';
-        instacartLinkArea.innerHTML = ''; 
+        if (instacartErrorMessageDiv) {
+            instacartErrorMessageDiv.textContent = '';
+            instacartErrorMessageDiv.style.display = 'none';
+        }
+        if (instacartLinkArea) {
+             instacartLinkArea.innerHTML = ''; 
+        }
     }
 }
 
 function displayInstacartError(message) {
     const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-    instacartErrorMessageDiv.textContent = message;
-    instacartErrorMessageDiv.style.display = 'block';
+    const sendButton = document.getElementById('send-to-instacart-button');
+    if(instacartErrorMessageDiv) {
+        instacartErrorMessageDiv.textContent = message;
+        instacartErrorMessageDiv.style.display = 'block';
+    }
+    // Re-enable button on error
+    if (sendButton) {
+         sendButton.disabled = false;
+    }
 }
 
 function clearInstacartResults() {
     const instacartLinkArea = document.getElementById('instacart-link-area');
     const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-    instacartLinkArea.innerHTML = '';
-    instacartErrorMessageDiv.textContent = '';
-    instacartErrorMessageDiv.style.display = 'none';
+    const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
+    
+    if(instacartLinkArea) instacartLinkArea.innerHTML = '';
+    if(instacartErrorMessageDiv) {
+        instacartErrorMessageDiv.textContent = '';
+        instacartErrorMessageDiv.style.display = 'none';
+    }
+    // Also ensure the button is visible/enabled when clearing results (e.g., before a new attempt)
+    if (sendButton) {
+        sendButton.style.display = 'inline-block'; // Ensure it's visible if it was hidden
+        sendButton.disabled = false; 
+    }
 } 
