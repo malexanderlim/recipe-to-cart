@@ -120,6 +120,19 @@ async function handleProcessImage(req, res) {
         }
         // ---------------------------------------------------------
 
+        if (!extractedText || extractedText.trim().length < 50) {
+            console.warn(`[Process Image Job ${jobId}] Quick Fail: Extracted text is empty or too short (${extractedText?.length || 0} chars). Assuming not a recipe.`);
+            const quickFailData = { 
+                ...jobData,
+                status: 'failed', 
+                error: 'Image does not contain enough readable text to be a recipe.', 
+                finishedAt: Date.now() 
+            };
+            await redis.set(jobId, JSON.stringify(quickFailData));
+            console.log(`[Process Image Job ${jobId}] Set Redis status to 'failed' due to quick fail.`);
+            return res.status(200).json({ message: `Job ${jobId} failed: Not enough readable text.` });
+        }
+
         if (extractedText && extractedText.trim().length > 0) {
             // --- Update Redis with Intermediate Status and Trigger Next Step ---
             console.log(`[Process Image Job ${jobId}] Vision processing successful. Updating Redis status to 'vision_completed'.`);

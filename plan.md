@@ -137,9 +137,27 @@ These issues directly impact the core value proposition or the demo user experie
 
 These improve the experience but are secondary to core functionality and feedback.
 
+*   **[ ] Implement Quick-Fail for Non-Recipe Inputs (P1):**
+    *   **Goal:** Prevent unnecessary LLM calls for images or URLs that don't contain recipe content, saving cost and providing faster feedback.
+    *   **Image Flow (`/api/process-image`):**
+        *   **Action:** After the Vision API call, check if the extracted text is empty or shorter than a minimum threshold (e.g., 50 characters).
+        *   **On Failure:** Update job status in KV/Redis to `failed` with a specific error (e.g., "Image does not contain enough readable text to be a recipe.") and **do not** publish the QStash message to trigger the text processing worker.
+        *   *(Considered, Deferred): Keyword analysis for reliability concerns.*
+    *   **URL Flow (`/api/process-url-job`):**
+        *   **Action (JSON-LD Path):** After successfully parsing JSON-LD, check if the `recipeIngredient` array exists and is non-empty.
+        *   **Action (Readability Path):** After successfully using Readability, check if the extracted `textContent` meets a minimum length threshold (e.g., 100 characters).
+        *   **On Failure (Either Path):** Update job status in KV/Redis to `failed` with a specific error (e.g., "No recipe ingredients found in structured data." or "Webpage content does not appear to be a recipe.") and **do not** proceed to the LLM call within the job.
+        *   *(Considered, Deferred): Keyword analysis for reliability concerns.*
+    *   **Frontend:** Ensure new specific error messages from the backend (`jobData.error`) are handled and displayed clearly in the respective recipe card during polling.
+*   **[ ] Implement Recipe Limit (Frontend):**
+    *   **Problem:** The application could become slow or unwieldy if a user tries to process too many recipes (e.g., >10) simultaneously. This could also lead to potential abuse or hit backend rate limits faster.
+    *   **Goal:** Limit the number of recipes that can be actively processed or displayed in the list at any given time to 10.
+    *   **Action:** Modify `frontend/script.js` to check the length of the `recipeData` array before processing a new image file or URL. If the length is 10 or more, prevent the addition and display an alert to the user (e.g., "Maximum of 10 recipes reached."). **(DONE)**
 *   **[ ] Refine Layout & Flow:**
     *   **Problem:** Pantry toggle placement is slightly awkward. Minor visual inconsistencies.
     *   **Action:** Experiment with relocating the "Pantry Item Toggle" (e.g., below "2. Extracted Recipes" heading or inside "3. Create Instacart List" section). Perform a quick visual pass for consistent spacing, alignment, and element styling (buttons, cards, etc.).
+*   **[X] Review UI for Instacart Mark Usage:** Ensure the frontend uses the name "Instacart" appropriately (functional descriptions) and does not use any Instacart logos or branding in a way that implies endorsement, per Section 8 and 16.9 of the T&Cs. ([Source: Developer T&Cs](https://docs.instacart.com/developer_platform_api/guide/terms_and_policies/developer_terms/))
+*   **[X] Confirm T&C Compliance Aspects:** Perform a final read-through of the T&Cs, focusing on data handling and any specific limitations relevant to the Recipe-to-Cart use case, ensuring no planned features conflict. ([Source: Developer T&Cs](https://docs.instacart.com/developer_platform_api/guide/terms_and_policies/developer_terms/))
 *   **[ ] Refactor Backend (`backend/server.js`) for Modularity (P1):**
     *   **Problem:** The `server.js` file is excessively long (1600+ lines), mixing routing, business logic, external API calls, and utility functions, hindering maintainability and testing.
     *   **Refactoring Checklist & Status:**
