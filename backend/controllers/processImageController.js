@@ -134,13 +134,13 @@ async function handleProcessImage(req, res) {
             console.log(`[Process Image Job ${jobId}] Redis updated successfully. Triggering next step via QStash.`);
 
             // --- Trigger the next processing step via QStash ---
-            const qstashWorkerUrl = process.env.QSTASH_WORKER_URL;
+            const qstashUrl = process.env.QSTASH_URL;
 
-            if (qstashClient && qstashWorkerUrl) {
+            if (qstashClient && qstashUrl) {
                  try {
-                     console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${qstashWorkerUrl}`);
+                     console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${qstashUrl}`);
                      const publishResponse = await qstashClient.publishJSON({
-                         url: qstashWorkerUrl,
+                         url: qstashUrl,
                          body: { jobId: jobId },
                          // Optional: Add headers if needed by the worker, e.g., for a secret
                          // headers: { 'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret' }
@@ -166,7 +166,7 @@ async function handleProcessImage(req, res) {
                      return res.status(200).json({ message: `Processing failed for Job ID ${jobId} due to trigger issue, status updated.` });
                  }
             } else {
-                 console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or QSTASH_WORKER_URL not set. Cannot trigger next step.`);
+                 console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or QSTASH_URL not set. Cannot trigger next step.`);
                  // Update Redis status to 'failed' as we cannot proceed
                  const configFailData = {
                      ...visionCompletedData,
