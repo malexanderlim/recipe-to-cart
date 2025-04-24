@@ -218,12 +218,26 @@ async function createList(req, res) {
         const consolidatedTotals = {}; 
 
         for (const rawItem of rawIngredients) {
-            if (!rawItem.ingredient || rawItem.quantity == null) continue;
+            console.log(`  V7 Consolidating Raw: ${JSON.stringify(rawItem)}`); 
+
+            // Skip only if ingredient name is missing
+            if (!rawItem.ingredient) { 
+                console.log(`    V7 Skipping raw item: Missing ingredient name.`);
+                continue;
+            }
             
+            // Default quantity to 1 if it's null/undefined
+            let rawQuantity = rawItem.quantity; 
+            if (rawQuantity == null) {
+                console.log(`    V7 Raw quantity is null for '${rawItem.ingredient}', assuming quantity = 1.`);
+                rawQuantity = 1;
+            } // Use rawQuantity (potentially defaulted to 1) below
+
             const normalizedName = nameMapping[rawItem.ingredient] || simpleNormalize(rawItem.ingredient);
+            console.log(`    V7 Mapped to normalizedName: ${normalizedName}`);
+            
             const conversionData = conversionMap.get(normalizedName);
             let rawUnit = rawItem.unit ? rawItem.unit.toLowerCase().trim() : null;
-            const rawQuantity = rawItem.quantity;
 
             // V7: Refined fallback/error handling during consolidation
             if (!conversionData) {
