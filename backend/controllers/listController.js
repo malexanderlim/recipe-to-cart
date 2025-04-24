@@ -233,7 +233,7 @@ async function createList(req, res) {
 
             // Use the same robust parsing logic as before for the JSON array
             // ... (robust parsing logic copied from V7 - parseAndCorrectJson can be used) ...
-            const parsedJson = parseAndCorrectJson(rawLlmResponse); // Use utility function
+            const parsedJson = await parseAndCorrectJson(null, rawLlmResponse, 'array'); // Use utility function WITH await, specify expectedType
             
             if (parsedJson === null) {
                 console.error("V8: Failed to parse JSON from LLM response after multiple attempts.");
