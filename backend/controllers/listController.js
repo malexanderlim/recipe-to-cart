@@ -180,58 +180,45 @@ async function createList(req, res) {
         console.log(`V7: Reduced ${rawIngredients.length} raw ingredients to ${uniqueIngredientsList.length} unique names.`);
         
         // Construct prompt for LLM (for both quantities and descriptions)
+        // --- MODIFIED Prompt - Reduced verbosity, focus on valid JSON ---
         const systemPrompt = `
             You are an expert ingredient normalizer for grocery lists, preparing data for platforms like Instacart.
-            Given a list of raw ingredients, standardize them and provide conversion rates between different units.
+            Given a list of raw ingredients, standardize them and provide conversion rates. **Your response MUST be valid and complete JSON.**
 
-            For EACH unique ingredient concept (e.g., "garlic" includes "cloves of garlic", "garlic cloves"), output:
-            1. normalized_name: A canonical, singular form. **Crucially, preserve important distinctions.** Do NOT over-generalize (e.g., "ground beef" -> "ground beef", not "beef"; "chicken breast" -> "chicken breast", not "chicken").
-            2. primary_unit: The most common **purchasable** unit, following Instacart conventions (e.g., "pound" or "ounce" for meats, "head" for lettuce, "bunch" for carrots/herbs, "can" for canned goods, "each" for countable items like tomatoes/onions/avocados). Use lowercase.
-            3. equivalent_units: Array of objects with unit name (lowercase) and conversion factor FROM the primary unit TO this unit.
+            For EACH unique ingredient concept output:
+            1. normalized_name: Canonical, singular form. Preserve important distinctions (e.g., "ground beef", not "beef").
+            2. primary_unit: Most common **purchasable** unit (Instacart style: pound, ounce, head, bunch, can, each). Use lowercase.
+            3. equivalent_units: Array of objects with unit name (lowercase) and conversion factor FROM the primary unit.
 
-            The equivalent_units array MUST include:
-            - The primary unit itself (factor_from_primary: 1).
-            - Conversions for relevant units commonly used by Instacart:
-                - **Weight:** Include 'pound', 'lb', 'ounce', 'oz', 'gram', 'g', 'kilogram', 'kg'.
-                - **Volume:** Include 'cup', 'c', 'fluid ounce', 'fl oz', 'tablespoon', 'tbsp', 'tbs', 'teaspoon', 'tsp', 'ts', 'milliliter', 'ml', 'liter', 'l', 'pint', 'pt', 'quart', 'qt', 'gallon', 'gal'.
-                - **Count:** Include 'each', 'bunch', 'can', 'head', 'package', 'packet', 'ear', 'clove', 'sprig', 'slice', 'large', 'medium', 'small'.
-            - Provide factors for BOTH full unit names AND common abbreviations where applicable (e.g., include both 'pound' and 'lb' if they are relevant).
-            - Ensure factors are accurate (e.g., 1 pound = 16 ounces, 1 cup = 16 tablespoons, 1 tablespoon = 3 teaspoons). Use null factor only if conversion is truly impossible or nonsensical.
+            **Keep the equivalent_units array concise:**
+            - **MUST** include the primary unit itself (factor_from_primary: 1).
+            - Include **at most TWO (2) additional** relevant units. Choose common cooking units (like cup, tbsp, tsp, oz, g) OR a significant alternative purchase unit (like 'each' if primary is 'pound').
+            - **DO NOT** include every possible unit or abbreviation. Focus on the most useful conversions.
+            - Ensure factors are accurate. Use null factor only if conversion is impossible.
 
             Example for 'ground beef':
             {
                 "normalized_name": "ground beef",
-                "primary_unit": "pound", // Common purchasable unit
+                "primary_unit": "pound",
                 "equivalent_units": [
                     { "unit": "pound", "factor_from_primary": 1 },
-                    { "unit": "lb", "factor_from_primary": 1 },
-                    { "unit": "ounce", "factor_from_primary": 16 },
-                    { "unit": "oz", "factor_from_primary": 16 },
-                    { "unit": "gram", "factor_from_primary": 453.592 },
-                    { "unit": "g", "factor_from_primary": 453.592 },
-                    { "unit": "kilogram", "factor_from_primary": 0.453592 },
-                    { "unit": "kg", "factor_from_primary": 0.453592 },
-                    { "unit": "package", "factor_from_primary": 1 } // Often sold in 1lb packages
+                    { "unit": "ounce", "factor_from_primary": 16 }, // Common weight alternative
+                    { "unit": "package", "factor_from_primary": 1 } // Common purchase alternative
                 ]
-            }
+            } // Max 2 additional units
 
             Example for 'tomato':
             {
                 "normalized_name": "tomato",
-                "primary_unit": "each", // Instacart recommended for countables
+                "primary_unit": "each",
                 "equivalent_units": [
                     { "unit": "each", "factor_from_primary": 1 },
-                    { "unit": "pound", "factor_from_primary": 0.4 }, // Approx weight
-                    { "unit": "lb", "factor_from_primary": 0.4 },
-                    { "unit": "ounce", "factor_from_primary": 6.4 }, // Approx weight
-                    { "unit": "oz", "factor_from_primary": 6.4 },
-                    { "unit": "gram", "factor_from_primary": 180 }, // Approx weight
-                    { "unit": "g", "factor_from_primary": 180 },
-                    { "unit": "cup", "factor_from_primary": 0.75 } // Approx chopped
+                    { "unit": "pound", "factor_from_primary": 0.4 }, // Common weight reference
+                    { "unit": "cup", "factor_from_primary": 0.75 } // Common cooking volume
                 ]
-            }
+            } // Max 2 additional units
 
-            Return ONLY a valid JSON array of objects with these exact keys. No explanation. Ensure units are lowercase.
+            Return ONLY a valid, complete JSON array of objects. No explanation. Ensure units are lowercase.
         `;
 
         const userPrompt = `
