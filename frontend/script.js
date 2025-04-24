@@ -508,7 +508,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- NEW: Function to display the review list ---
     function displayReviewList(ingredients, originalTitle) {
-        if (!reviewListArea) return;
+        console.log("[displayReviewList] Received ingredients:", JSON.parse(JSON.stringify(ingredients))); // Log deep copy
+        if (!reviewListArea) {
+            console.error("[displayReviewList] reviewListArea element not found!");
+            return;
+        }
         reviewListArea.innerHTML = ''; // Clear previous content
         // reviewListArea.style.display = 'block'; // No longer needed here, section is shown before calling
 
@@ -524,74 +528,104 @@ document.addEventListener('DOMContentLoaded', () => {
         reviewListArea.appendChild(reviewHelper);
 
         if (!ingredients || ingredients.length === 0) {
+            console.warn("[displayReviewList] No ingredients to display.");
             reviewListArea.innerHTML += '<p>No ingredients generated after consolidation.</p>';
             return;
         }
 
         const list = document.createElement('ul');
         list.classList.add('review-ingredient-list'); 
+        console.log("[displayReviewList] Created UL element.");
 
         // ingredients is now expected to be [{name: ..., line_item_measurements: [{unit, quantity}, ...]}, ...]
-        ingredients.forEach((item, index) => {
-            const li = document.createElement('li');
-            li.classList.add('ingredient-item'); 
-            
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.id = `review-ingredient-${index}`;
-            checkbox.checked = true; 
-            checkbox.dataset.itemData = JSON.stringify(item); 
-            
-            // --- Display Primary Measurement (with fixes) --- 
-            let displayText = 'Error: No measurement found';
-            let primaryMeasurement = null;
-
-            if (item.line_item_measurements && item.line_item_measurements.length > 0) {
-                // **FIX 1: Prioritize 'each' (head) for garlic display**
-                if (item.name === 'garlic') {
-                    primaryMeasurement = item.line_item_measurements.find(m => m.unit === 'each' || m.unit === 'head');
-                }
-                // If not garlic or 'each' not found for garlic, use the first measurement
-                if (!primaryMeasurement) {
-                    primaryMeasurement = item.line_item_measurements[0]; 
-                }
-
-                // **FIX 2: Avoid duplicating name if unit contains it (Revised)**
-                const quantityStr = primaryMeasurement.quantity;
-                const unitStr = primaryMeasurement.unit || '';
-                const nameStr = item.name || '';
-
-                // Stricter Check V2: Check if unit string *ends with* the name string, ignoring case.
-                // This handles "fresh thyme sprigs" vs "thyme" better than includes().
-                const unitLower = unitStr.toLowerCase();
-                const nameLower = nameStr.toLowerCase();
-                // Also check if unit is just the plural of name (e.g. unit='bay leaves', name='bay leaf')
-                const isPluralOfName = unitLower.endsWith('s') && unitLower.slice(0, -1) === nameLower;
+        try {
+            ingredients.forEach((item, index) => {
+                console.log(`[displayReviewList] Processing item ${index}:`, JSON.parse(JSON.stringify(item)));
+                const li = document.createElement('li');
+                li.classList.add('ingredient-item'); 
                 
-                if (unitLower.endsWith(nameLower) || isPluralOfName) {
-                    displayText = `${quantityStr} ${unitStr}`.trim();
-                     // Add console log for debugging this specific case
-                    console.log(`Herb Check: Unit '${unitStr}' contained name '${nameStr}' or was plural. Display: '${displayText}'`);
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `review-ingredient-${index}`;
+                checkbox.checked = true; 
+                try {
+                    checkbox.dataset.itemData = JSON.stringify(item);
+                } catch (stringifyError) {
+                    console.error(`[displayReviewList] Error stringifying item data for index ${index}:`, stringifyError, item);
+                    // Skip this item if data can't be stored
+                    return; 
+                }
+                
+                // --- Display Primary Measurement (with fixes) --- 
+                let displayText = 'Error: Could not determine display text'; // Default error message
+                let primaryMeasurement = null;
+
+                if (item.line_item_measurements && item.line_item_measurements.length > 0) {
+                    // **FIX 1: Prioritize 'each' (head) for garlic display**
+                    if (item.name === 'garlic') {
+                        primaryMeasurement = item.line_item_measurements.find(m => m.unit === 'each' || m.unit === 'head');
+                    }
+                    // If not garlic or 'each' not found for garlic, use the first measurement
+                    if (!primaryMeasurement) {
+                        primaryMeasurement = item.line_item_measurements[0]; 
+                    }
+                    console.log(`[displayReviewList] Item ${index} - Primary Measurement:`, primaryMeasurement);
+
+                    // **FIX 2: Avoid duplicating name if unit contains it (Revised)**
+                    // Ensure primaryMeasurement and its quantity are valid before proceeding
+                    if (primaryMeasurement && typeof primaryMeasurement.quantity !== 'undefined' && primaryMeasurement.quantity !== null) {
+                        const quantityStr = primaryMeasurement.quantity; // Keep as number for now
+                        const unitStr = primaryMeasurement.unit || '';
+                        const nameStr = item.name || '';
+
+                        // Stricter Check V2: Check if unit string *ends with* the name string, ignoring case.
+                        // This handles "fresh thyme sprigs" vs "thyme" better than includes().
+                        const unitLower = unitStr.toLowerCase();
+                        const nameLower = nameStr.toLowerCase();
+                        // Also check if unit is just the plural of name (e.g. unit='bay leaves', name='bay leaf')
+                        const isPluralOfName = unitLower.endsWith('s') && unitLower.slice(0, -1) === nameLower;
+                        
+                        if (unitLower.endsWith(nameLower) || isPluralOfName) {
+                            displayText = `${quantityStr} ${unitStr}`.trim();
+                            // Add console log for debugging this specific case
+                            // console.log(`Herb Check: Unit '${unitStr}' contained name '${nameStr}' or was plural. Display: '${displayText}'`);
+                        } else {
+                            displayText = `${quantityStr} ${unitStr} ${nameStr}`.replace(/\s+/g, ' ').trim();
+                        }
+                    } else {
+                         console.warn(`[displayReviewList] Item ${index} - Missing quantity in primary measurement:`, primaryMeasurement);
+                         displayText = ` ${item.name || 'Unknown Item'} (Quantity Error)`;
+                    }
+                    
                 } else {
-                    displayText = `${quantityStr} ${unitStr} ${nameStr}`.replace(/\s+/g, ' ').trim();
+                     console.warn(`[displayReviewList] Item ${index} - Missing line_item_measurements.`);
+                    // Fallback if no measurements
+                    displayText = ` ${item.name || 'Unknown Item'} (Measurement Error)`; 
                 }
+                console.log(`[displayReviewList] Item ${index} - Generated displayText:`, displayText);
+                // ----------------------------------
+
+                const label = document.createElement('label');
+                label.htmlFor = `review-ingredient-${index}`;
+                label.textContent = displayText;
                 
-            } else {
-                // Fallback if no measurements
-                displayText = ` ${item.name} (Check units/quantity)`; 
-            }
-            // ----------------------------------
+                console.log(`[displayReviewList] Item ${index} - Appending checkbox and label to LI.`);
+                li.appendChild(checkbox);
+                li.appendChild(label);
 
-            const label = document.createElement('label');
-            label.htmlFor = `review-ingredient-${index}`;
-            label.textContent = displayText;
-            
-            li.appendChild(checkbox);
-            li.appendChild(label);
-            list.appendChild(li);
-        });
+                console.log(`[displayReviewList] Item ${index} - Appending LI to UL.`);
+                list.appendChild(li);
+            });
+            console.log("[displayReviewList] Finished forEach loop.");
+        } catch (loopError) {
+            console.error("[displayReviewList] Error during ingredients.forEach loop:", loopError);
+            // Display a general error message in the review area
+            reviewListArea.innerHTML += `<p class="error">An error occurred while building the review list item. Check the console for details.</p>`;
+        }
 
+        console.log("[displayReviewList] Appending UL to reviewListArea.");
         reviewListArea.appendChild(list);
+        console.log("[displayReviewList] UL appended.");
 
         // Add the "Send to Instacart" button
         const sendButton = document.createElement('button');
@@ -602,7 +636,9 @@ document.addEventListener('DOMContentLoaded', () => {
         sendButton.classList.add('instacart-link-button'); 
         sendButton.dataset.originalTitle = originalTitle; // Store title for later use
         sendButton.addEventListener('click', handleSendToInstacart);
+        console.log("[displayReviewList] Appending Send button.");
         reviewListArea.appendChild(sendButton);
+        console.log("[displayReviewList] Function finished.");
     }
 
     // --- NEW: Function to handle sending the final list ---
