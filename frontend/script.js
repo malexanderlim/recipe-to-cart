@@ -524,16 +524,45 @@ document.addEventListener('DOMContentLoaded', () => {
             checkbox.type = 'checkbox';
             checkbox.id = `review-ingredient-${index}`;
             checkbox.checked = true; 
-            // Store the full item data as JSON string for reconstruction
             checkbox.dataset.itemData = JSON.stringify(item); 
             
-            // --- Display Primary Measurement --- 
+            // --- Display Primary Measurement (with fixes) --- 
             let displayText = 'Error: No measurement found';
+            let primaryMeasurement = null;
+
             if (item.line_item_measurements && item.line_item_measurements.length > 0) {
-                const primaryMeasurement = item.line_item_measurements[0]; // Assume first is primary
-                displayText = ` ${primaryMeasurement.quantity} ${primaryMeasurement.unit || ''} ${item.name}`.replace(/\s+/g, ' ').trim();
+                // **FIX 1: Prioritize 'each' (head) for garlic display**
+                if (item.name === 'garlic') {
+                    primaryMeasurement = item.line_item_measurements.find(m => m.unit === 'each' || m.unit === 'head');
+                }
+                // If not garlic or 'each' not found for garlic, use the first measurement
+                if (!primaryMeasurement) {
+                    primaryMeasurement = item.line_item_measurements[0]; 
+                }
+
+                // **FIX 2: Avoid duplicating name if unit contains it (Revised)**
+                const quantityStr = primaryMeasurement.quantity;
+                const unitStr = primaryMeasurement.unit || '';
+                const nameStr = item.name || '';
+
+                // Stricter Check V2: Check if unit string *ends with* the name string, ignoring case.
+                // This handles "fresh thyme sprigs" vs "thyme" better than includes().
+                const unitLower = unitStr.toLowerCase();
+                const nameLower = nameStr.toLowerCase();
+                // Also check if unit is just the plural of name (e.g. unit='bay leaves', name='bay leaf')
+                const isPluralOfName = unitLower.endsWith('s') && unitLower.slice(0, -1) === nameLower;
+                
+                if (unitLower.endsWith(nameLower) || isPluralOfName) {
+                    displayText = `${quantityStr} ${unitStr}`.trim();
+                     // Add console log for debugging this specific case
+                    console.log(`Herb Check: Unit '${unitStr}' contained name '${nameStr}' or was plural. Display: '${displayText}'`);
+                } else {
+                    displayText = `${quantityStr} ${unitStr} ${nameStr}`.replace(/\s+/g, ' ').trim();
+                }
+                
             } else {
-                displayText = ` ${item.name} (Check units/quantity)`; // Fallback
+                // Fallback if no measurements
+                displayText = ` ${item.name} (Check units/quantity)`; 
             }
             // ----------------------------------
 

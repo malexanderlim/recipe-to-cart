@@ -67,3 +67,4 @@
 - [ ] Basic user authentication
 - [ ] Save/Load recipes
 - [ ] Support for different OCR/Vision providers 
+
