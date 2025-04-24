@@ -415,7 +415,7 @@ async function createList(req, res) {
             // --- MODIFIED --- Use canonicalRawUnit for checks below
             if (!canonicalRawUnit) { 
                 if (primaryUnit === 'each') { 
-                     quantityInPrimary = rawQuantity;
+                     quantityInPrimary = rawQuantity; // Already defaulted to 1 if null
                      conversionSuccessful = true;
                      console.log(`  V7: ${rawItem.ingredient} - Assuming unitless as primary unit 'each'`);
                 } else if (eqUnitsMap.has('leaf') && normalizedName.includes('leaf')) {
@@ -424,7 +424,7 @@ async function createList(req, res) {
                         const factorFromPrimary = eqUnitsMap.get('leaf');
                          if (factorFromPrimary != null && factorFromPrimary > 0) {
                             const factorToPrimary = 1.0 / factorFromPrimary;
-                            quantityInPrimary = rawQuantity * factorToPrimary;
+                            quantityInPrimary = rawQuantity * factorToPrimary; // rawQuantity defaulted to 1
                             conversionSuccessful = true;
                             console.log(`  V7: ${rawItem.ingredient} - Converted unitless (as leaf) to ${quantityInPrimary.toFixed(3)} ${primaryUnit}`);
                         } else {
@@ -434,8 +434,15 @@ async function createList(req, res) {
                          console.warn(`  V7: Unitless '${rawItem.ingredient}' assumed 'leaf', but no 'leaf' conversion factor provided by LLM.`);
                     }
                 } else {
-                    console.warn(`  V7: Cannot convert unitless '${rawItem.ingredient}' to primary unit '${primaryUnit}'. Adding raw.`);
-                    // Keep track of raw quantity if conversion fails
+                    // --- MODIFIED FALLBACK ---
+                    // If unitless and primary unit isn't 'each', assume they want 1 package/item.
+                    console.warn(`  V7: Unitless '${rawItem.ingredient}' found. Primary unit is '${primaryUnit}'. Assuming quantity '1 each' for shopping list.`);
+                    // We will add this quantity directly to the 'each' unit later.
+                    // Set quantityInPrimary to the defaulted quantity (usually 1)
+                    quantityInPrimary = rawQuantity; // Should be 1 from the earlier default
+                    // Mark conversion as successful to proceed, but we'll handle the unit below.
+                    conversionSuccessful = true;
+                    // We won't use primaryUnit here, force 'each' later
                 }
             } else { // Attempt conversion if canonicalRawUnit exists
                 if (canonicalRawUnit === primaryUnit) {
@@ -465,22 +472,33 @@ async function createList(req, res) {
             if (!consolidatedTotals[normalizedName]) consolidatedTotals[normalizedName] = { units: {}, primaryUnit: primaryUnit }; 
 
             if (conversionSuccessful) {
-                consolidatedTotals[normalizedName].units[primaryUnit] = (consolidatedTotals[normalizedName].units[primaryUnit] || 0) + quantityInPrimary;
-                // Calculate secondary units only if primary conversion worked
-                ['oz', 'fl oz'].forEach(secondaryUnit => {
-                     if (secondaryUnit === primaryUnit) return;
-                     if (eqUnitsMap.has(secondaryUnit)) {
-                         const factorFromPrimaryForSecondary = eqUnitsMap.get(secondaryUnit);
-                         if (factorFromPrimaryForSecondary > 0) {
-                              const quantityInSecondary = quantityInPrimary * factorFromPrimaryForSecondary;
-                              if (quantityInSecondary > 0) {
-                                   consolidatedTotals[normalizedName].units[secondaryUnit] = (consolidatedTotals[normalizedName].units[secondaryUnit] || 0) + quantityInSecondary;
-                              }
-                         }
-                     }
-                });
+                // --- MODIFIED ACCUMULATION for the unitless fallback ---
+                let unitToAccumulate = primaryUnit;
+                if (!canonicalRawUnit && primaryUnit !== 'each' && !(eqUnitsMap.has('leaf') && normalizedName.includes('leaf'))) {
+                    // If we hit the modified unitless fallback (where we assumed '1 each')
+                    unitToAccumulate = 'each';
+                    console.log(`    V7: Accumulating unitless '${rawItem.ingredient}' as '${unitToAccumulate}'`);
+                     // Ensure the primary unit is still stored correctly, even if we add 'each'
+                     consolidatedTotals[normalizedName].primaryUnit = primaryUnit;
+                }
+
+                consolidatedTotals[normalizedName].units[unitToAccumulate] = (consolidatedTotals[normalizedName].units[unitToAccumulate] || 0) + quantityInPrimary;
+                
+                // --- REMOVED Secondary unit calculation - keep it simple for now ---
+                // ['oz', 'fl oz'].forEach(secondaryUnit => {
+                //      if (secondaryUnit === primaryUnit) return;
+                //      if (eqUnitsMap.has(secondaryUnit)) {
+                //          const factorFromPrimaryForSecondary = eqUnitsMap.get(secondaryUnit);
+                //          if (factorFromPrimaryForSecondary > 0) {
+                //               const quantityInSecondary = quantityInPrimary * factorFromPrimaryForSecondary;
+                //               if (quantityInSecondary > 0) {
+                //                    consolidatedTotals[normalizedName].units[secondaryUnit] = (consolidatedTotals[normalizedName].units[secondaryUnit] || 0) + quantityInSecondary;
+                //               }
+                //          }
+                //      }
+                // });
             } else {
-                 // Add raw quantity if conversion failed
+                 // Add raw quantity if conversion failed (using canonical unit if possible)
                  // --- MODIFIED --- Use canonicalRawUnit for the key
                  const unitToAdd = canonicalRawUnit || 'unknown_unit'; 
                  consolidatedTotals[normalizedName].units[unitToAdd] = (consolidatedTotals[normalizedName].units[unitToAdd] || 0) + rawQuantity;
