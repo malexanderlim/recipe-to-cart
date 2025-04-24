@@ -11,4 +11,8 @@ recipe-vision-sa-key.json
 backend/.env
 
 # Ignore Node.js dependencies
-backend/node_modules/ 
+backend/node_modules/
+/node_modules/
+
+# Ignore environment variables file
+backend/.env 
