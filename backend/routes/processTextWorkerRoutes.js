@@ -23,6 +23,9 @@ router.post('/',
                 return res.status(401).send('Unauthorized: Missing Signature');
             }
             
+            console.log('[QStash Verify - Receiver] Signature Header:', signature);
+            console.log('[QStash Verify - Receiver] Raw Body as String:', req.body.toString('utf-8'));
+            
             // req.body should be a Buffer here thanks to express.raw()
             const isValid = await receiver.verify({
                 signature: signature,
