@@ -1176,7 +1176,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (addUrlButton && recipeUrlInput) {
         const handleUrlSubmit = () => {
             console.log('Attempting URL submit...');
-            const url = recipeUrlInput.value.trim();
+            let url = recipeUrlInput.value.trim(); // Changed const to let
             // Clear previous error message
             if(urlErrorMessageDiv) {
                 urlErrorMessageDiv.textContent = '';
