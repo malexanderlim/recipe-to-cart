@@ -132,6 +132,13 @@ These issues directly impact the core value proposition or the demo user experie
 *   **[ ] Visual Design: Subtle Enhancements (Lower Priority):**
     *   Consider adding subtle background textures or gradients if time permits.
     *   Consider adding simple icons (e.g., upload, URL, checkmark, error) if time permits.
+*   **[X] Add Further Polish/UX Improvements (Prioritized):**
+    *   **[X] 1. Empty State (Section 2):** Add and control visibility of a message when no recipes are present.
+    *   **[X] 2. Button Feedback (Active State):** Add `active:` variants to button styles for visual feedback on click.
+    *   **[X] 3. Focus States Review:** Ensure all interactive elements have clear, consistent focus states.
+    *   **[X] 4. Remove Single Recipe Card ('X' Button):** Allow users to dismiss individual failed/timed-out cards.
+    *   **[X] 5. Transitions (Fade-in):** Add subtle transitions for new elements appearing.
+    *   **[X] 6. Dynamic Title for Final List:** Display "Ingredients for [Recipe A] and [Recipe B]..." above the final list.
 
 ---
 

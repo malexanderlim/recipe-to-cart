@@ -1,5 +1,6 @@
 // Global store for recipe data and status
 let recipeData = {}; // { 'tempId-xyz': { status: 'pending', file: File, jobId: null, error: null, result: null, sourceType: 'file'|'url', inputUrl: null }, ... }
+let processedRecipes = []; // <<< MOVE TO GLOBAL SCOPE >>>
 
 // *** Define helper for empty state visibility ***
 function updateEmptyStateVisibility() {
@@ -43,7 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // State for multiple recipes
-    let processedRecipes = []; // Array to store data for each recipe: { id, file, title, yield, ingredients, scaleFactor, error }
     let recipeCounter = 0; // Simple ID generator
 
     // Determine backend URL based on hostname
@@ -90,27 +90,44 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Ensure empty state is correct on load --- 
     updateEmptyStateVisibility(); // Call the helper on load
 
+    // Updated loading state indicator
+    function setLoadingState(isLoading, fileCount = 0) {
+        if (isLoading) {
+            // *** Modify loading text ***
+            loadingIndicator.textContent = `Processing ${fileCount} file(s)...`; // Keep generic for now, covers initial/add
+            loadingIndicator.style.display = 'block';
+            errorMessageDiv.textContent = ''; // Clear general error message
+            errorMessageDiv.style.display = 'none';
+        } else {
+            loadingIndicator.style.display = 'none';
+        }
+    }
+
     // New handler for multiple files
     async function handleMultipleImageUpload(event) {
         const files = event.target.files;
         if (!files || files.length === 0) return;
 
-        clearAllResults(); // Shows empty state via updateEmptyStateVisibility called inside
+        // *** REMOVE clearAllResults() to make uploads additive ***
+        // clearAllResults(); 
+
+        // *** Use the *new* file count for the loading message ***
         setLoadingState(true, files.length); 
 
-        updateEmptyStateVisibility(); // Call helper instead
+        updateEmptyStateVisibility(); // Hide empty state if it was visible
 
-        processedRecipes = []; 
+        // *** REMOVE processedRecipes reset ***
+        // processedRecipes = []; 
 
         for (const file of files) {
-            displayImagePreview(file); // Show preview/filename for current file being processed
+            // displayImagePreview(file); // Preview now handled in renderSingleRecipeResult
             await processSingleFile(file);
-            updateEmptyStateVisibility(); // Update after each file potentially adds to recipeData
+            updateEmptyStateVisibility(); 
         }
         
         setLoadingState(false); 
         updateCreateListButtonState(); 
-        updateEmptyStateVisibility(); // Final check after loop
+        updateEmptyStateVisibility(); 
     }
 
     // Function to process one file
@@ -192,6 +209,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Renders the UI block for a single recipe
     // Modified to accept loading message
     function renderSingleRecipeResult(recipeData, isLoading = false, loadingMessage = 'Processing...', internalStatus = null) {
+        
+        // *** Define Spinner SVG at the top ***
+        const spinnerSVG = `
+            <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-700 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+        `;
+
         // --- Status Mapping ---
         let displayStatus = loadingMessage;
         if (isLoading) {
@@ -219,10 +245,39 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!recipeDiv) {
             recipeDiv = document.createElement('div');
             recipeDiv.id = recipeData.id;
-            // Use the new card class - Apply Tailwind classes
-            recipeDiv.classList.add('recipe-card', 'bg-white', 'p-4', 'rounded-lg', 'shadow', 'mb-4'); 
+            recipeDiv.classList.add(
+                'recipe-card', 
+                'relative', 
+                'bg-white', 
+                'p-4', 
+                'rounded-lg', 
+                'shadow-md', 
+                'mb-4',
+                'opacity-0', 
+                'transition-opacity', 
+                'duration-300', 
+                'ease-in-out'
+            ); 
             recipeResultsContainer.appendChild(recipeDiv);
+            requestAnimationFrame(() => {
+                recipeDiv.classList.add('opacity-100');
+            });
+        } else {
+            recipeDiv.classList.add('opacity-100');
         }
+
+        // *** Add Remove Button HTML ***
+        const removeButtonHTML = `
+            <button 
+                class="remove-recipe-button absolute top-2 right-2 p-1 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors"
+                data-recipe-id="${recipeData.id}"
+                aria-label="Remove recipe ${recipeData.title || recipeData.id}"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+        `;
 
         // Build HTML structure for yield controls using new classes
         let yieldControlsHTML = '';
@@ -233,16 +288,31 @@ document.addEventListener('DOMContentLoaded', () => {
             // Calculate display value, handle potential NaN
             let currentDisplayValue = Math.round(quantity * scaleFactor);
             if (isNaN(currentDisplayValue)) { currentDisplayValue = quantity; } // Fallback
+            const lowerCaseUnit = unit ? unit.toLowerCase() : ''; // Pre-calculate lowercase unit
 
+            // *** RESTORE CORRECT HTML STRUCTURE ***
             yieldControlsHTML = `
-                <div class="scale-yield-controls flex items-center gap-2 mt-2 mb-3 flex-wrap">
-                    <label for="yield-input-${recipeData.id}" class="text-sm font-medium text-gray-700 whitespace-nowrap">Scale Recipe:</label>
-                    <div class="yield-buttons flex">
-                        <button data-recipe-id="${recipeData.id}" class="yield-decrement bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-2 rounded-l" aria-label="Decrease yield">-</button>
-                        <button data-recipe-id="${recipeData.id}" class="yield-increment bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-2 rounded-r" aria-label="Increase yield">+</button>
+                <div class="scale-yield-controls mt-2 mb-3"> <!-- Removed outer flex for manual layout -->
+                    <div class="flex items-center flex-wrap gap-2"> <!-- Top row for controls -->
+                        <label for="yield-input-${recipeData.id}" class="text-sm font-medium text-gray-700 whitespace-nowrap">Scale Recipe:</label>
+                        <div class="yield-buttons flex">
+                            <button data-recipe-id="${recipeData.id}" 
+                                    class="yield-decrement bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-2 rounded-l focus:outline-none focus:ring-1 focus:ring-gray-400" 
+                                    aria-label="Decrease yield">
+                                -
+                            </button>
+                            <button data-recipe-id="${recipeData.id}" 
+                                    class="yield-increment bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-2 rounded-r focus:outline-none focus:ring-1 focus:ring-gray-400" 
+                                    aria-label="Increase yield">
+                                +
+                            </button>
+                        </div>
+                        <input type="number" id="yield-input-${recipeData.id}" data-recipe-id="${recipeData.id}" value="${currentDisplayValue}" min="1" step="1" aria-labelledby="yield-label-${recipeData.id}" class="w-14 px-2 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        <span class="yield-unit-label text-sm text-gray-600" id="yield-label-${recipeData.id}">${lowerCaseUnit}</span> <!-- Unit only -->
                     </div>
-                    <input type="number" id="yield-input-${recipeData.id}" data-recipe-id="${recipeData.id}" value="${currentDisplayValue}" min="1" step="1" aria-labelledby="yield-label-${recipeData.id}" class="w-12 px-2 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    <span class="yield-unit-label text-sm text-gray-600 ml-1" id="yield-label-${recipeData.id}">${unit || ''} <span class="text-xs">(Original: ${quantity})</span></span>
+                    <div class="text-xs text-gray-500 mt-1 ml-2"> <!-- Bottom row for original yield -->
+                        Original Recipe: ${quantity} ${lowerCaseUnit}
+                    </div>
                 </div>
             `;
         }
@@ -272,9 +342,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Use h3 for title in card
-        const displayTitle = isLoading ? "Processing Recipe..." : recipeData.title;
+        const displayTitle = isLoading ? `<div class="flex items-center">${spinnerSVG} Processing Recipe...</div>` : recipeData.title;
+        // *** Add removeButtonHTML to the output ***
         recipeDiv.innerHTML = ` 
-            <h3>${displayTitle}</h3>
+            ${removeButtonHTML} 
+            <h3 class="text-lg font-semibold mb-2 pr-8">${displayTitle}</h3> <!-- Add padding-right to avoid overlap -->
             ${yieldControlsHTML}
             ${ingredientsHTML}
         `;
@@ -348,14 +420,17 @@ document.addEventListener('DOMContentLoaded', () => {
         inputElement.value = currentDisplayValue; 
         recipeData.scaleFactor = originalQuantity > 0 ? currentDisplayValue / originalQuantity : 1; 
         
-        // --- FIX: Update ingredient text directly instead of re-rendering --- 
+        // *** RESTORE Ingredient Text Update Logic *** 
         const recipeCard = document.getElementById(recipeId);
-        const ingredientItems = recipeCard?.querySelectorAll('.ingredient-list .ingredient-item'); 
+        const ingredientItems = recipeCard?.querySelectorAll('.ingredients-list li'); 
         
         if (ingredientItems && recipeData.ingredients) {
              const newScaleFactor = recipeData.scaleFactor; // Use the updated scale factor
              ingredientItems.forEach(li => {
-                 const index = parseInt(li.querySelector('input[type="checkbox"]')?.dataset.ingredientIndex, 10);
+                 const checkbox = li.querySelector('input[type="checkbox"]');
+                 if (!checkbox) return; // Skip if checkbox not found
+
+                 const index = parseInt(checkbox.dataset.ingredientIndex, 10);
                  const itemData = recipeData.ingredients[index];
                  const label = li.querySelector('label');
                  
@@ -363,13 +438,19 @@ document.addEventListener('DOMContentLoaded', () => {
                      let displayQuantity = '';
                      if (itemData.quantity !== null && typeof itemData.quantity === 'number') {
                          const scaledValue = itemData.quantity * newScaleFactor;
-                         displayQuantity = scaledValue.toFixed(2);
-                         if (displayQuantity.endsWith('.00')) { 
-                             displayQuantity = displayQuantity.slice(0, -3); // Remove .00
-                         } else if (displayQuantity.includes('.') && displayQuantity.endsWith('0')) {
-                             displayQuantity = displayQuantity.slice(0, -1); // Remove trailing 0 only if there's a decimal
-                         }
-                         displayQuantity = displayQuantity.toString(); 
+                         // Format to max 2 decimal places, removing trailing zeros
+                         displayQuantity = parseFloat(scaledValue.toFixed(2)).toString();
+                         // Original formatting logic (might need refinement for fractions etc.)
+                         // displayQuantity = scaledValue.toFixed(2);
+                         // if (displayQuantity.endsWith('.00')) { 
+                         //     displayQuantity = displayQuantity.slice(0, -3); // Remove .00
+                         // } else if (displayQuantity.includes('.') && displayQuantity.endsWith('0')) {
+                         //     displayQuantity = displayQuantity.slice(0, -1); // Remove trailing 0 only if there's a decimal
+                         // }
+                         // displayQuantity = displayQuantity.toString(); 
+                     } else if (itemData.quantity !== null) {
+                         // Handle non-numeric quantities (just display original)
+                         displayQuantity = itemData.quantity.toString();
                      }
                      const unit = itemData.unit || '';
                      const ingredientName = itemData.ingredient || '';
@@ -378,7 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
                  }
              });
         }
-        // --- End of FIX ---
+        // *** End of RESTORED Logic ***
         
         updateCreateListButtonState(); 
     }
@@ -530,15 +611,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // *** NEW: Display the returned processed list for review ***
             if (data.processedIngredients && data.originalTitle) {
-                // Make Section 3 visible
+                // Make Section 3 visible with fade-in
                 const finalListSection = document.getElementById('final-list-section');
                 if (finalListSection) {
-                    finalListSection.style.display = 'block';
+                    // finalListSection.style.display = 'block'; // Remove direct display style change
+                    finalListSection.classList.remove('opacity-0'); // Make it potentially visible
+                    finalListSection.style.display = 'block'; // Set display block first
+                    // Trigger opacity change
+                    requestAnimationFrame(() => { 
+                         finalListSection.classList.add('opacity-100'); 
+                    });
                 }
-                // Hide the loading indicator for the review button itself
                 setReviewLoadingState(false); 
-                // Display the list
-                displayReviewList(data.processedIngredients, data.originalTitle);
+                displayReviewList(data.processedIngredients, data.originalTitle, validRecipeTitles);
             } else {
                 throw new Error("Backend did not return the processed ingredient list.");
             }
@@ -552,8 +637,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- NEW: Function to display the review list ---
-    function displayReviewList(ingredients, originalTitle) {
-        console.log("[displayReviewList] Received ingredients:", JSON.parse(JSON.stringify(ingredients))); // Log deep copy
+    function displayReviewList(ingredients, originalTitle, validRecipeTitles = []) {
+        console.log("[displayReviewList] Received ingredients:", JSON.parse(JSON.stringify(ingredients))); 
+        console.log("[displayReviewList] Received titles:", validRecipeTitles);
         if (!reviewListArea) {
             console.error("[displayReviewList] reviewListArea element not found!");
             return;
@@ -562,9 +648,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Add helper text for review section
         const reviewHelper = document.createElement('p');
-        reviewHelper.classList.add('helper-text');
+        reviewHelper.classList.add('text-sm', 'text-gray-600', 'mb-4');
         reviewHelper.textContent = 'This is the final list after processing and combining items. Uncheck any items you don\'t want before creating the list.';
         reviewListArea.appendChild(reviewHelper);
+
+        // *** Add Dynamic Title Header ***
+        if (validRecipeTitles.length > 0) {
+            const titleHeader = document.createElement('h3');
+            titleHeader.classList.add('text-lg', 'font-semibold', 'mb-2'); // Match recipe card title style
+            
+            let titleText = 'Ingredients for ';
+            if (validRecipeTitles.length === 1) {
+                titleText += validRecipeTitles[0];
+            } else if (validRecipeTitles.length === 2) {
+                titleText += `${validRecipeTitles[0]} and ${validRecipeTitles[1]}`;
+            } else { // 3 or more
+                const lastTitle = validRecipeTitles.pop();
+                titleText += validRecipeTitles.join(', ') + ', and ' + lastTitle;
+            }
+            titleHeader.textContent = titleText;
+            reviewListArea.appendChild(titleHeader);
+        }
+        // *** End Dynamic Title Header ***
 
         if (!ingredients || ingredients.length === 0) {
             console.warn("[displayReviewList] No ingredients to display.");
@@ -673,7 +778,22 @@ document.addEventListener('DOMContentLoaded', () => {
         // Change button text
         sendButton.textContent = 'Create Instacart Shopping List'; 
         // Apply the same class as the final link for similar styling
-        sendButton.classList.add('instacart-link-button', 'bg-blue-500', 'hover:bg-blue-700', 'text-white', 'font-bold', 'py-2', 'px-4', 'rounded', 'focus:outline-none', 'focus:shadow-outline'); 
+        sendButton.classList.add(
+            'instacart-link-button', 
+            'bg-blue-500', 
+            'hover:bg-blue-700', 
+            'text-white', 
+            'font-bold', 
+            'py-2', 
+            'px-4', 
+            'rounded-md', 
+            'disabled:opacity-50', 
+            'disabled:cursor-not-allowed', 
+            'transition', 
+            'duration-150', 
+            'ease-in-out',
+            'active:scale-95' // *** Add active state ***
+        );
         sendButton.dataset.originalTitle = originalTitle; // Store title for later use
         sendButton.addEventListener('click', handleSendToInstacart);
         console.log("[displayReviewList] Appending Send button.");
@@ -798,18 +918,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Updated loading state indicator
-    function setLoadingState(isLoading, fileCount = 0) {
-        if (isLoading) {
-            loadingIndicator.textContent = `Processing ${fileCount} image(s)...`;
-            loadingIndicator.style.display = 'block';
-            errorMessageDiv.textContent = ''; // Clear general error message
-            errorMessageDiv.style.display = 'none';
-        } else {
-            loadingIndicator.style.display = 'none';
-        }
-    }
-    
     // Updated error display (appends messages)
     function displayError(message) {
         const p = document.createElement('p');
@@ -827,8 +935,21 @@ document.addEventListener('DOMContentLoaded', () => {
         if (createListButton) { createListButton.disabled = true; }
         errorMessageDiv.innerHTML = ''; 
         errorMessageDiv.style.display = 'none';
-        clearReviewAreaAndFinalLink(); // Use new function
+        clearReviewAreaAndFinalLink(); 
         
+        // *** Hide final list section when clearing ***
+        const finalListSection = document.getElementById('final-list-section');
+        if (finalListSection) {
+            finalListSection.classList.remove('opacity-100');
+            finalListSection.classList.add('opacity-0');
+            // Optionally set display none after transition, or rely on opacity-0
+             setTimeout(() => { // Hide after transition
+                if (!finalListSection.classList.contains('opacity-100')) { // Check if it wasn't shown again quickly
+                     finalListSection.style.display = 'none';
+                }
+            }, 300); // Match duration
+        }
+
         // Also remove the pantry checkbox if it exists
         const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
         if (existingCheckboxDiv) {
@@ -916,7 +1037,26 @@ document.addEventListener('DOMContentLoaded', () => {
         link.href = url;
         link.textContent = 'Open Instacart Shopping List';
         link.target = '_blank'; // Open in new tab
-        link.classList.add('instacart-link-button'); // Add class for styling
+        // *** Apply Tailwind button styles (like the orange Create button) ***
+        link.classList.add(
+            'inline-block', // Make it behave like a button for padding/margin
+            'bg-orange-500', 
+            'hover:bg-orange-600', 
+            'text-white', 
+            'font-bold', 
+            'py-2', 
+            'px-6', 
+            'rounded-md', 
+            'transition', 
+            'duration-150', 
+            'ease-in-out',
+            'active:scale-95',
+            'focus:outline-none', 
+            'focus:ring-2', 
+            'focus:ring-offset-2', 
+            'focus:ring-orange-500' 
+        );
+        // link.classList.add('instacart-link-button'); // Remove old class
         
         instacartLinkArea.appendChild(link);
     }
@@ -1343,6 +1483,71 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         updateEmptyStateVisibility(); // Call helper as recipeData is updated
     } // <<< Closing brace for processSingleUrl
+
+    // --- Add listener for remove button clicks (event delegation) --- 
+    if (recipeResultsContainer) {
+        recipeResultsContainer.addEventListener('click', handleRemoveRecipe);
+    } else {
+        console.error("Could not find recipeResultsContainer to attach remove listener.");
+    }
+
+    // --- NEW: Handler for removing a recipe card --- 
+    function handleRemoveRecipe(event) {
+        // Check if the clicked element is the remove button or inside it (the SVG)
+        const removeButton = event.target.closest('.remove-recipe-button'); 
+        if (!removeButton) {
+            return; // Click wasn't on a remove button
+        }
+
+        const recipeId = removeButton.dataset.recipeId;
+        if (!recipeId) {
+            console.error("Remove button clicked, but no recipeId found.");
+            return;
+        }
+        console.log(`Remove button clicked for recipe: ${recipeId}`);
+
+        // *** Add Confirmation Dialog ***
+        // Try to get the title for a more informative message
+        let recipeTitle = recipeId; // Default to ID
+        const recipeInfo = processedRecipes.find(r => r.id === recipeId) || recipeData[recipeId];
+        if (recipeInfo && recipeInfo.title) {
+            recipeTitle = recipeInfo.title;
+        }
+        
+        if (!window.confirm(`Are you sure you want to remove the recipe "${recipeTitle}"?`)) {
+            console.log(`Removal cancelled for recipe: ${recipeId}`);
+            return; // Stop if user cancels
+        }
+        // *** End Confirmation Dialog ***
+
+        // Stop polling if this recipe was still in progress
+        if (recipeData[recipeId]) {
+            console.log(`Stopping polling for removed recipe: ${recipeId}`);
+            stopPolling(recipeId); // stopPolling already deletes from recipeData
+        } else {
+             // If not in recipeData, ensure it's removed from processedRecipes
+            processedRecipes = processedRecipes.filter(recipe => recipe.id !== recipeId);
+        }
+
+        // Remove the card from the DOM
+        const recipeCard = document.getElementById(recipeId);
+        if (recipeCard) {
+            recipeCard.remove();
+        }
+
+        // Update UI states
+        updateEmptyStateVisibility();
+        updateCreateListButtonState();
+        
+        // Remove pantry checkbox if no recipes are left
+        if (Object.keys(recipeData).length === 0 && processedRecipes.length === 0) {
+            const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
+            if (existingCheckboxDiv) {
+                existingCheckboxDiv.remove();
+                pantryCheckbox = null;
+            }
+        }
+    }
 
 }); // <<< RESTORED Closing brace for DOMContentLoaded listener
 
