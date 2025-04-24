@@ -222,77 +222,83 @@ const fetch = (...args) =>
           Array.isArray(recipeJson.recipeIngredient) &&
           recipeJson.recipeIngredient.length
         ) {
-          const title = recipeJson.name || 'Recipe from URL';
-  
-          // Parse yield
-          let parsedYield = null;
-          if (recipeJson.recipeYield) {
-            const rawYield = recipeJson.recipeYield;
-            if (typeof rawYield === 'string') parsedYield = parseYieldString(rawYield);
-            else if (Array.isArray(rawYield) && rawYield.length) {
-              const best =
-                rawYield.find((el) => typeof el === 'string' && /\d/.test(el) && /[a-zA-Z]/.test(el)) || rawYield[0];
-              if (best) parsedYield = parseYieldString(String(best)); // Ensure string
-            } else if (typeof rawYield === 'object' && rawYield !== null) {
-              const q =
-                rawYield.value ??
-                rawYield.yieldValue ??
-                rawYield.valueReference?.value ??
-                null;
-              const u =
-                rawYield.unitText ??
-                rawYield.unitCode ??
-                rawYield.valueReference?.unitText ??
-                null;
-              if (q != null) {
-                const qtyNum = parseFloat(String(q).replace(',', '.')) || null;
-                if (qtyNum) parsedYield = { quantity: qtyNum, unit: u || null };
-              } else if (rawYield.description) { // Fallback to description in object
-                parsedYield = parseYieldString(String(rawYield.description));
-              }
-            }
-          }
-  
-          // ingredient strings → ask LLM to parse
           const ingredientStrings = recipeJson.recipeIngredient
             .map((line) => String(line).trim())
             .filter(Boolean);
-          if (ingredientStrings.length) {
-            // Use the new Redis update helper
-            await updateUrlJobStatusInRedis(jobId, 'llm_parsing_ingredients'); 
+          
+          if (!ingredientStrings || ingredientStrings.length === 0) {
+            console.warn(`[${jobId}] JSON-LD found, but recipeIngredient array was empty or only contained empty strings.`);
+            // Don't set recipeResult, let it proceed to fallback or fail gracefully
+          } else {
+            const title = recipeJson.name || 'Recipe from URL';
   
-            const sysPrompt =
-              'You are an expert ingredient parser assisting with grocery lists. ' +
-              'Convert raw ingredient strings into a JSON array of objects ' +
-              '[{quantity, unit, name}]. Use null for missing fields. Respond ONLY with that JSON.';
-            const userPrompt =
-              'Ingredient List:\n' +
-              ingredientStrings.map((s) => `- ${s}`).join('\n');
+            // Parse yield
+            let parsedYield = null;
+            if (recipeJson.recipeYield) {
+              const rawYield = recipeJson.recipeYield;
+              if (typeof rawYield === 'string') parsedYield = parseYieldString(rawYield);
+              else if (Array.isArray(rawYield) && rawYield.length) {
+                const best =
+                  rawYield.find((el) => typeof el === 'string' && /\d/.test(el) && /[a-zA-Z]/.test(el)) || rawYield[0];
+                if (best) parsedYield = parseYieldString(String(best)); // Ensure string
+              } else if (typeof rawYield === 'object' && rawYield !== null) {
+                const q =
+                  rawYield.value ??
+                  rawYield.yieldValue ??
+                  rawYield.valueReference?.value ??
+                  null;
+                const u =
+                  rawYield.unitText ??
+                  rawYield.unitCode ??
+                  rawYield.valueReference?.unitText ??
+                  null;
+                if (q != null) {
+                  const qtyNum = parseFloat(String(q).replace(',', '.')) || null;
+                  if (qtyNum) parsedYield = { quantity: qtyNum, unit: u || null };
+                } else if (rawYield.description) { // Fallback to description in object
+                  parsedYield = parseYieldString(String(rawYield.description));
+                }
+              }
+            }
   
-            const llmResp = await callAnthropic(sysPrompt, userPrompt);
-            const parsed = await parseAndCorrectJson(jobId, llmResp, 'array');
+            // ingredient strings → ask LLM to parse
+            if (ingredientStrings.length) {
+              // Use the new Redis update helper
+              await updateUrlJobStatusInRedis(jobId, 'llm_parsing_ingredients'); 
   
-            if (parsed && parsed.length) {
-              // Ensure correct keys (quantity, unit, ingredient)
-              const clean = parsed
-                .filter((o) => o && typeof o === 'object' && (o.name || o.ingredient))
-                .map((o) => ({
-                  quantity: o.quantity ?? null,
-                  unit: o.unit ?? null,
-                  ingredient: o.ingredient || o.name // Prefer 'ingredient', fallback to 'name'
-                }));
+              const sysPrompt =
+                'You are an expert ingredient parser assisting with grocery lists. ' +
+                'Convert raw ingredient strings into a JSON array of objects ' +
+                '[{quantity, unit, name}]. Use null for missing fields. Respond ONLY with that JSON.';
+              const userPrompt =
+                'Ingredient List:\n' +
+                ingredientStrings.map((s) => `- ${s}`).join('\n');
   
-              if (clean.length) {
-                recipeResult = {
-                  title,
-                  yield: parsedYield,
-                  ingredients: clean,
-                  sourceUrl: finalUrl,
-                  extractedFrom: 'json-ld' // Add source info
-                };
-                console.log(
-                  `[${jobId}] Parsed ${clean.length} ingredients via JSON-LD + LLM`
-                );
+              const llmResp = await callAnthropic(sysPrompt, userPrompt);
+              const parsed = await parseAndCorrectJson(jobId, llmResp, 'array');
+  
+              if (parsed && parsed.length) {
+                // Ensure correct keys (quantity, unit, ingredient)
+                const clean = parsed
+                  .filter((o) => o && typeof o === 'object' && (o.name || o.ingredient))
+                  .map((o) => ({
+                    quantity: o.quantity ?? null,
+                    unit: o.unit ?? null,
+                    ingredient: o.ingredient || o.name // Prefer 'ingredient', fallback to 'name'
+                  }));
+  
+                if (clean.length) {
+                  recipeResult = {
+                    title,
+                    yield: parsedYield,
+                    ingredients: clean,
+                    sourceUrl: finalUrl,
+                    extractedFrom: 'json-ld' // Add source info
+                  };
+                  console.log(
+                    `[${jobId}] Parsed ${clean.length} ingredients via JSON-LD + LLM`
+                  );
+                }
               }
             }
           }
@@ -311,8 +317,8 @@ const fetch = (...args) =>
   
           const doc = new JSDOM(htmlContent, { url: finalUrl });
           const article = new Readability(doc.window.document).parse();
-          if (!article || !article.textContent || article.textContent.trim().length < 100)
-            throw new Error('Readability could not extract sufficient content.');
+          if (!article || !article.textContent)
+            throw new Error('Readability could not extract any text content.');
   
           const fallbackTitle = article.title || 'Recipe from URL';
           const mainText = article.textContent.substring(0, 18000); // leave room for prompt

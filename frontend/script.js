@@ -101,7 +101,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Function to process one file
     async function processSingleFile(file) {
         const recipeId = `recipe-${recipeCounter++}`;
-        
+
+        // <<< ADD RECIPE LIMIT CHECK >>>
+        if (Object.keys(recipeData).length >= 10) {
+            alert("Maximum of 10 recipes reached. Please review or clear the current list before adding more.");
+            // Optionally remove the preview added in the calling loop if needed
+            // This depends on how previews are handled in handleMultipleImageUpload
+            return; // Stop processing this file
+        }
+        // <<< END CHECK >>>
+
         const recipeDataObj = { // Renamed variable to avoid confusion with global map
             id: recipeId, 
             file: file, 
@@ -1221,6 +1230,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const tempId = `tempId-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
         console.log(`Processing URL (${tempId}): ${url}`);
     
+        // <<< ADD RECIPE LIMIT CHECK >>>
+        if (Object.keys(recipeData).length >= 10) {
+            alert("Maximum of 10 recipes reached. Please review or clear the current list before adding more.");
+             if(urlErrorMessageDiv) { // Also display near URL input if possible
+                urlErrorMessageDiv.textContent = 'Maximum of 10 recipes reached.';
+                urlErrorMessageDiv.style.display = 'block';
+            }
+            return; // Stop processing this URL
+        }
+        // <<< END CHECK >>>
+
         // Add to global store and render initial pending state
         recipeData[tempId] = {
             id: tempId, // Ensure the ID is also stored here
