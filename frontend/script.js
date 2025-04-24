@@ -238,8 +238,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Use h3 for title in card
+        const displayTitle = isLoading ? "Processing Recipe..." : recipeData.title;
         recipeDiv.innerHTML = ` 
-            <h3>${recipeData.title}</h3>
+            <h3>${displayTitle}</h3>
             ${yieldControlsHTML}
             ${ingredientsHTML}
         `;
@@ -416,7 +417,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Renamed function: Handles getting the processed list from backend
     async function handleReviewList() { 
         if (!createListButton) return;
-        console.log("Review List button clicked. Processing recipes:", processedRecipes);
+        // --- Deduplicate processedRecipes --- 
+        const uniqueRecipeIds = new Set();
+        const uniqueProcessedRecipes = processedRecipes.filter(recipe => {
+            if (!uniqueRecipeIds.has(recipe.id)) {
+                uniqueRecipeIds.add(recipe.id);
+                return true;
+            }
+            return false;
+        });
+        console.log("Review List button clicked. Processing unique recipes:", uniqueProcessedRecipes);
+        // -----------------------------------
 
         setReviewLoadingState(true); // New loading state for review generation
         clearReviewAreaAndFinalLink(); // Clear previous review/link
@@ -424,7 +435,8 @@ document.addEventListener('DOMContentLoaded', () => {
         let allScaledIngredients = [];
         let validRecipeTitles = [];
 
-        processedRecipes.forEach(recipeData => {
+        // --- Use the deduplicated list --- 
+        uniqueProcessedRecipes.forEach(recipeData => {
             if (!recipeData.error && recipeData.ingredients.length > 0) {
                 let hasCheckedIngredients = false;
                 const scaledAndFiltered = recipeData.ingredients
@@ -734,7 +746,6 @@ document.addEventListener('DOMContentLoaded', () => {
     function clearReviewAreaAndFinalLink() {
         if (reviewListArea) {
             reviewListArea.innerHTML = '';
-            reviewListArea.style.display = 'none';
         }
          clearInstacartResults(); // Clear final link/error area too
     }
@@ -1023,8 +1034,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 recipeInfo.scaleFactor = 1; // Reset scale factor
                 recipeInfo.error = null; // Clear any previous error
                 
-                // *** Move completed data from map to array ***
-                processedRecipes.push(recipeInfo); // Add to final results array
+                // *** Move completed data from map to array - WITH DUPLICATE CHECK ***
+                if (!processedRecipes.some(r => r.id === recipeId)) {
+                    processedRecipes.push(recipeInfo); // Add to final results array
+                } else {
+                    console.warn(`[Polling ${jobId}] Duplicate completion detected for ${recipeId}. Ignoring.`);
+                }
                 // Remove from the map once processing is final
                 delete recipeData[recipeId];
                 // ****************************************************
@@ -1042,8 +1057,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 stopPolling(recipeId); // Stop polling and timeout
                 recipeInfo.error = data.error || 'Processing failed.'; // Store the error
                 
-                // *** Move failed data from map to array for display ***
-                processedRecipes.push(recipeInfo); // Add to final results array
+                // *** Move failed data from map to array for display - WITH DUPLICATE CHECK ***
+                if (!processedRecipes.some(r => r.id === recipeId)) {
+                    processedRecipes.push(recipeInfo); // Add to final results array
+                } else {
+                    console.warn(`[Polling ${jobId}] Duplicate failure detected for ${recipeId}. Ignoring.`);
+                }
                 delete recipeData[recipeId]; // Remove from map
                 // ***********************************************************
 
@@ -1090,8 +1109,12 @@ document.addEventListener('DOMContentLoaded', () => {
              // Optional: Re-render immediately to show the error if needed
              // renderSingleRecipeResult(recipeInfo, false);
              
-             // *** Important: Move error data from map to array if stopping with error ***
-             processedRecipes.push(recipeInfo); // Add to final results array
+             // *** Important: Move error data from map to array if stopping with error - WITH DUPLICATE CHECK ***
+             if (!processedRecipes.some(r => r.id === recipeId)) {
+                 processedRecipes.push(recipeInfo); // Add to final results array
+             } else {
+                 console.warn(`[Polling Stop] Duplicate error handling detected for ${recipeId}. Ignoring.`);
+             }
              delete recipeData[recipeId]; // Remove from map
             // ***********************************************************
 
@@ -1193,14 +1216,7 @@ document.addEventListener('DOMContentLoaded', () => {
                      console.error(`Recipe data for tempId ${tempId} not found after API call.`);
                 }
             } else {
-                const errorText = await response.text();
-                console.error(`Error starting URL processing job for ${tempId}: ${response.status} ${errorText}`);
-                const recipeInfo = recipeData[tempId]; // Get ref
-                if (recipeInfo) {
-                    recipeInfo.status = 'failed';
-                    recipeInfo.error = `Failed to start processing: ${response.status} ${errorText || 'Server error'}`;
-                    renderSingleRecipeResult(recipeInfo, false); 
-                }
+                throw new Error(`Unexpected response status: ${response.status}`);
             }
         } catch (error) {
             console.error(`Network or fetch error processing URL ${tempId}:`, error);
@@ -1211,9 +1227,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderSingleRecipeResult(recipeInfo, false); 
             }
         }
-    } // <<< Corrected closing brace for processSingleUrl
+    } // <<< Closing brace for processSingleUrl
 
-}); // <<< END OF DOMContentLoaded LISTENER
+}); // <<< RESTORED Closing brace for DOMContentLoaded listener
 
 // Keep existing globally defined functions like detectYield, displayImagePreview, etc., OUTSIDE DOMContentLoaded
 function detectYield(text) {
