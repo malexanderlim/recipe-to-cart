@@ -526,12 +526,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         reviewListArea.innerHTML = ''; // Clear previous content
-        // reviewListArea.style.display = 'block'; // No longer needed here, section is shown before calling
-
-        const heading = document.createElement('h2'); // Use H2 for consistency
-        // Ensure correct numbering
-        heading.textContent = '3. Review Final List'; 
-        reviewListArea.appendChild(heading);
 
         // Add helper text for review section
         const reviewHelper = document.createElement('p');
@@ -659,6 +653,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const originalTitle = sendButton.dataset.originalTitle;
         const reviewListCheckboxes = reviewListArea.querySelectorAll('.review-ingredient-list input[type="checkbox"]');
         
+        sendButton.disabled = true; // Disable button immediately
         setInstacartLoadingState(true); 
         clearInstacartResults(); 
 
@@ -707,10 +702,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             displayInstacartLink(data.instacartUrl);
+            // Success: Keep the create button disabled/hidden implicitly by not re-enabling
 
         } catch (error) {
             console.error('Error sending final list to Instacart:', error);
             displayInstacartError(`Failed to send list to Instacart: ${error.message}`);
+            // Error: Re-enable the button so user can retry
+            sendButton.disabled = false; 
         } finally {
             setInstacartLoadingState(false);
         }
@@ -810,11 +808,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const instacartLoadingIndicator = document.getElementById('instacart-loading-indicator');
         const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
         const instacartLinkArea = document.getElementById('instacart-link-area');
-        // Update loading text
+        const sendButton = document.getElementById('send-to-instacart-button');
+
         if (instacartLoadingIndicator) { 
             instacartLoadingIndicator.textContent = isLoading ? 'Sending to Instacart...' : '';
             instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
         }
+        
+        // Manage button state based on loading
+        if (sendButton) {
+             sendButton.disabled = isLoading; // Disable while loading
+        }
+
         if (isLoading) {
             if (instacartErrorMessageDiv) {
                 instacartErrorMessageDiv.textContent = '';
@@ -827,24 +832,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     function displayInstacartError(message) {
         const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-        instacartErrorMessageDiv.textContent = message;
-        instacartErrorMessageDiv.style.display = 'block';
+        const sendButton = document.getElementById('send-to-instacart-button');
+        if(instacartErrorMessageDiv) {
+            instacartErrorMessageDiv.textContent = message;
+            instacartErrorMessageDiv.style.display = 'block';
+        }
+        // Re-enable button on error
+        if (sendButton) {
+             sendButton.disabled = false;
+        }
     }
     function clearInstacartResults() {
         const instacartLinkArea = document.getElementById('instacart-link-area');
         const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-        instacartLinkArea.innerHTML = '';
-        instacartErrorMessageDiv.textContent = '';
-        instacartErrorMessageDiv.style.display = 'none';
+        const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
+        
+        if(instacartLinkArea) instacartLinkArea.innerHTML = '';
+        if(instacartErrorMessageDiv) {
+            instacartErrorMessageDiv.textContent = '';
+            instacartErrorMessageDiv.style.display = 'none';
+        }
+        // Also ensure the button is visible/enabled when clearing results (e.g., before a new attempt)
+        if (sendButton) {
+            sendButton.style.display = 'inline-block'; // Ensure it's visible if it was hidden
+            sendButton.disabled = false; 
+        }
     }
     function displayInstacartLink(url) {
-        // --- Remove debugging logs --- 
-        // console.log("displayInstacartLink called with URL:", url);
         const instacartLinkArea = document.getElementById('instacart-link-area');
-        // if (!instacartLinkArea) { ... } // Keep check?
-        // console.log("Found instacartLinkArea element:", instacartLinkArea);
+        const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
+
+        if (!instacartLinkArea) return;
         
         instacartLinkArea.innerHTML = ''; // Clear previous links/messages
+
+        // Hide the "Create" button on success
+        if (sendButton) {
+            sendButton.style.display = 'none';
+        }
 
         // Add success message
         const successMsg = document.createElement('p');
@@ -858,9 +883,7 @@ document.addEventListener('DOMContentLoaded', () => {
         link.target = '_blank'; // Open in new tab
         link.classList.add('instacart-link-button'); // Add class for styling
         
-        // console.log("Appending link element:", link);
         instacartLinkArea.appendChild(link);
-        // console.log("Content of instacartLinkArea after append:", instacartLinkArea.innerHTML);
     }
 
     // --- Function to create and add the pantry checkbox --- 
@@ -1290,24 +1313,55 @@ function setInstacartLoadingState(isLoading) {
     const instacartLoadingIndicator = document.getElementById('instacart-loading-indicator');
     const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
     const instacartLinkArea = document.getElementById('instacart-link-area');
-    instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
+    const sendButton = document.getElementById('send-to-instacart-button');
+
+    if (instacartLoadingIndicator) { 
+        instacartLoadingIndicator.textContent = isLoading ? 'Sending to Instacart...' : '';
+        instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
+    }
+    
+    // Manage button state based on loading
+    if (sendButton) {
+         sendButton.disabled = isLoading; // Disable while loading
+    }
+
     if (isLoading) {
-        instacartErrorMessageDiv.textContent = '';
-        instacartErrorMessageDiv.style.display = 'none';
-        instacartLinkArea.innerHTML = ''; 
+        if (instacartErrorMessageDiv) {
+            instacartErrorMessageDiv.textContent = '';
+            instacartErrorMessageDiv.style.display = 'none';
+        }
+        if (instacartLinkArea) {
+             instacartLinkArea.innerHTML = ''; 
+        }
     }
 }
 
 function displayInstacartError(message) {
     const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-    instacartErrorMessageDiv.textContent = message;
-    instacartErrorMessageDiv.style.display = 'block';
+    const sendButton = document.getElementById('send-to-instacart-button');
+    if(instacartErrorMessageDiv) {
+        instacartErrorMessageDiv.textContent = message;
+        instacartErrorMessageDiv.style.display = 'block';
+    }
+    // Re-enable button on error
+    if (sendButton) {
+         sendButton.disabled = false;
+    }
 }
 
 function clearInstacartResults() {
     const instacartLinkArea = document.getElementById('instacart-link-area');
     const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-    instacartLinkArea.innerHTML = '';
-    instacartErrorMessageDiv.textContent = '';
-    instacartErrorMessageDiv.style.display = 'none';
+    const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
+    
+    if(instacartLinkArea) instacartLinkArea.innerHTML = '';
+    if(instacartErrorMessageDiv) {
+        instacartErrorMessageDiv.textContent = '';
+        instacartErrorMessageDiv.style.display = 'none';
+    }
+    // Also ensure the button is visible/enabled when clearing results (e.g., before a new attempt)
+    if (sendButton) {
+        sendButton.style.display = 'inline-block'; // Ensure it's visible if it was hidden
+        sendButton.disabled = false; 
+    }
 } 
