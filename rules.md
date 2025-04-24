@@ -52,3 +52,19 @@ This document outlines key rules and best practices to follow during development
     *   **Problem:** Handling errors for individual items within a loop (e.g., `forEach`) using `try...catch` and then immediately returning (`return;`) from the entire function within the `catch` block prevents subsequent iterations and crucial final actions (like appending the partially processed results) outside the loop from executing.
     *   **Rule:** When using `try...catch` inside a loop to handle errors for individual iterations: Log or handle the error within the `catch` block, but **avoid** using `return` (or `throw`/`break` unless the error is truly fatal) if the goal is to process other items and perform actions after the loop. Allow the loop to continue and ensure code following the loop (e.g., appending a partially built list) can still run.
     *   **Verification:** Check `catch` blocks inside loops. Ensure they handle the iteration's error appropriately without unnecessarily halting the entire function's execution if partial success is desired. 
+
+11. **Environment & Tooling Troubleshooting:**
+    *   **Problem:** Issues like "command not found" or "could not determine executable" might stem from the local environment (Node/npm/nvm versions, cache, PATH) or unexpected changes in package structure/behavior (especially with major version bumps), rather than project code.
+    *   **Rule:** When encountering persistent command execution failures after verifying project configuration:
+        1.  **Isolate:** Try running the command directly (e.g., `npx <command>`) to bypass intermediate scripts (`npm run`).
+        2.  **Verify Artifacts:** Check if the expected executable links exist in `node_modules/.bin` (`ls -la node_modules/.bin`).
+        3.  **Check Package Manifest:** Examine the `package.json` of the *installed dependency* (in `node_modules/<package>/package.json`) for a `bin` field to confirm how its executable *should* be invoked.
+        4.  **Consider Version:** If using a very new major version of a tool/package, check its documentation for breaking changes or different invocation methods. Consider downgrading to a more stable/LTS version as a troubleshooting step.
+        5.  **Clean & Reinstall:** Use `npm cache clean --force` and perform clean reinstalls (`rm -rf node_modules && rm package-lock.json && npm install`).
+        6.  **Check Environment:** Verify `$PATH` and consider testing with a different Node.js version via NVM.
+    *   **Verification:** Document the troubleshooting steps taken. Prioritize checking for known issues or version incompatibilities before assuming project code errors for tool execution problems. 
+
+12. **DOM ID/Selector Consistency:**
+    *   **Problem:** When dynamically generating HTML (e.g., in JavaScript) that includes elements with IDs or specific classes, and later trying to select or manipulate those elements using `getElementById`, `querySelector`, etc., inconsistencies in the generated ID format or selector string will cause the lookup to fail silently or throw errors.
+    *   **Rule:** Ensure that the exact string format used to generate an element's ID or the selectors used to query elements (including class names) are identical between the code that creates the HTML and the code that later tries to find or interact with those elements. Pay close attention to template literals, variable interpolation, and specific class names.
+    *   **Verification:** When debugging issues where DOM manipulation isn't working, log the generated ID/selector from the creation code and the queried ID/selector from the manipulation code to verify they match exactly. Use browser developer tools (Elements tab) to inspect the rendered HTML and confirm the actual IDs/classes present. 

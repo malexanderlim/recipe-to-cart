@@ -144,76 +144,105 @@ async function handleProcessImage(req, res) {
             };
 
             await redis.set(jobId, JSON.stringify(visionCompletedData));
-            console.log(`[Process Image Job ${jobId}] Redis updated successfully. Triggering next step via QStash.`);
+            console.log(`[Process Image Job ${jobId}] Redis updated successfully. Triggering next step.`);
 
-            // --- Trigger the next processing step via QStash ---
-            // const qstashUrl = process.env.QSTASH_URL; // Remove reliance on static Env Var
-            
-            // Dynamically construct the target URL based on the environment
-            let targetWorkerUrl;
-            if (process.env.VERCEL_URL) {
-                targetWorkerUrl = `https://${process.env.VERCEL_URL}/api/process-text-worker`;
-                console.log(`[Process Image Job ${jobId}] Determined target worker URL (Vercel): ${targetWorkerUrl}`);
+            // --- Conditionally Trigger Next Step (QStash for Prod, Fetch for Local) ---
+            if (process.env.NODE_ENV === 'production') {
+                 console.log(`[Process Image Job ${jobId}] Running in production mode. Triggering via QStash.`);
+                // --- Trigger the next processing step via QStash (Production Logic) ---
+                let targetWorkerUrl;
+                if (process.env.VERCEL_URL) {
+                    targetWorkerUrl = `https://${process.env.VERCEL_URL}/api/process-text-worker`;
+                    console.log(`[Process Image Job ${jobId}] Determined target worker URL (Vercel): ${targetWorkerUrl}`);
+                } else {
+                    // Fallback for local development (SHOULD NOT HAPPEN IN PRODUCTION MODE)
+                    // If VERCEL_URL isn't set in prod, QStash won't work correctly.
+                    console.error(`[Process Image Job ${jobId}] CRITICAL: Running in production but VERCEL_URL is not set! QStash trigger may fail.`);
+                    // Attempt to construct a plausible URL, but this is risky
+                    targetWorkerUrl = `${req.protocol}://${req.get('host')}/api/process-text-worker`; 
+                    console.warn(`[Process Image Job ${jobId}] Attempting fallback worker URL (Prod w/o VERCEL_URL): ${targetWorkerUrl}`);
+                }
+
+                if (qstashClient && targetWorkerUrl) {
+                    try {
+                        console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${targetWorkerUrl}`);
+                        const publishResponse = await qstashClient.publishJSON({
+                            url: targetWorkerUrl,
+                            body: { jobId: jobId },
+                        });
+                        console.log(`[Process Image Job ${jobId}] Successfully published job to QStash. Message ID: ${publishResponse.messageId}`);
+                    } catch (qstashError) {
+                        console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to publish job to QStash. Error:`, qstashError);
+                        // Update Redis status to 'failed' as the trigger failed
+                        const triggerFailData = {
+                            ...visionCompletedData,
+                            status: 'failed',
+                            error: 'Processing Error: Failed to trigger the analysis step via QStash.',
+                            finishedAt: Date.now()
+                        };
+                        try {
+                            console.log(`[Process Image Job ${jobId}] Attempting to update Redis to 'failed' due to QStash publish error...`);
+                            await redis.set(jobId, JSON.stringify(triggerFailData));
+                            console.log(`[Process Image Job ${jobId}] Successfully updated Redis status to 'failed' after QStash error.`);
+                        } catch (redisSetError) {
+                             console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' AFTER QStash publish failed! Error:`, redisSetError);
+                        }
+                        return res.status(200).json({ message: `Processing failed for Job ID ${jobId} due to trigger issue, status updated.` });
+                    }
+                } else {
+                    console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or could not determine target worker URL. Cannot trigger next step.`);
+                    const configFailData = {
+                        ...visionCompletedData,
+                        status: 'failed',
+                        error: 'Processing Error: QStash configuration missing, cannot trigger analysis.',
+                        finishedAt: Date.now()
+                    };
+                    try {
+                        await redis.set(jobId, JSON.stringify(configFailData));
+                    } catch (redisSetError) {
+                        console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' AFTER QStash config error! Error:`, redisSetError);
+                    }
+                    return res.status(200).json({ message: `Processing failed for Job ID ${jobId} due to configuration issue.` });
+                }
+                // --- End QStash Trigger (Production) ---
             } else {
-                // Fallback for local development
-                targetWorkerUrl = `${req.protocol}://${req.get('host')}/api/process-text-worker`;
-                console.log(`[Process Image Job ${jobId}] Determined target worker URL (Local): ${targetWorkerUrl}`);
-            }
-
-            // if (qstashClient && qstashUrl) { // Old check
-            if (qstashClient && targetWorkerUrl) { // Check using dynamically constructed URL
-                 try {
-                     // console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${qstashUrl}`); // Old log
-                     console.log(`[Process Image Job ${jobId}] Publishing job to QStash URL: ${targetWorkerUrl}`); // Log the dynamic URL
-                     const publishResponse = await qstashClient.publishJSON({
-                         // url: qstashUrl, // Old static URL
-                         url: targetWorkerUrl, // Use the dynamically constructed URL
-                         body: { jobId: jobId },
-                         // Optional: Add headers if needed by the worker, e.g., for a secret
-                         // headers: { 'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret' }
-                     });
-                     console.log(`[Process Image Job ${jobId}] Successfully published job to QStash. Message ID: ${publishResponse.messageId}`);
-                 } catch (qstashError) {
-                     console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to publish job to QStash. Error:`, qstashError);
-                     // Update Redis status to 'failed' as the trigger failed
-                     const triggerFailData = {
-                         ...visionCompletedData, // Use the data we just stored
-                         status: 'failed',
-                         error: 'Processing Error: Failed to trigger the analysis step via QStash.',
-                         finishedAt: Date.now()
-                     };
-                     try {
-                         console.log(`[Process Image Job ${jobId}] Attempting to update Redis to 'failed' due to QStash publish error...`);
-                         await redis.set(jobId, JSON.stringify(triggerFailData));
-                         console.log(`[Process Image Job ${jobId}] Successfully updated Redis status to 'failed' after QStash error.`);
-                     } catch (redisSetError) {
-                          console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' AFTER QStash publish failed! Error:`, redisSetError);
+                // --- Trigger the next processing step via Local Fetch (Development Mock) ---
+                console.log(`[Process Image Job ${jobId}] Running in development mode. Triggering worker via local fetch.`);
+                const localWorkerUrl = `${req.protocol}://${req.get('host')}/api/process-text-worker`;
+                console.log(`[Process Image Job ${jobId}] Local worker URL: ${localWorkerUrl}`);
+                fetch(localWorkerUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        // Include secret if the worker expects it (even locally)
+                        'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret' 
+                    },
+                    body: JSON.stringify({ jobId: jobId })
+                }).catch(async (fetchError) => {
+                    console.error(`[Process Image Job ${jobId}] LOCAL DEV: Error triggering background process fetch:`, fetchError);
+                     // Optionally update Redis status to failed here if triggering fails critically even locally
+                     if (redis) {
+                          try {
+                              const triggerFailData = { 
+                                  status: 'failed', 
+                                  error: 'DEV MOCK: Failed to trigger local background processing step.', 
+                                  originalFilename: jobData?.originalFilename, 
+                                  createdAt: jobData?.createdAt,
+                                  finishedAt: Date.now()
+                               };
+                              await redis.set(jobId, JSON.stringify(triggerFailData));
+                              console.log(`[Process Image Job ${jobId}] LOCAL DEV: Updated Redis status to failed due to local trigger error.`);
+                          } catch (redisError) {
+                              console.error(`[Process Image Job ${jobId}] LOCAL DEV: Failed to update Redis after trigger error:`, redisError);
+                          }
                      }
-                     // Respond 200 but log the internal error (job state handled in Redis)
-                     return res.status(200).json({ message: `Processing failed for Job ID ${jobId} due to trigger issue, status updated.` });
-                 }
-            } else {
-                 // console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or QSTASH_URL not set. Cannot trigger next step.`); // Old error
-                 // Updated error message to reflect dynamic URL logic
-                 console.error(`[Process Image Job ${jobId}] CRITICAL: QStash client not initialized or could not determine target worker URL. Cannot trigger next step.`); 
-                 // Update Redis status to 'failed' as we cannot proceed
-                 const configFailData = {
-                     ...visionCompletedData,
-                     status: 'failed',
-                     error: 'Processing Error: QStash configuration missing, cannot trigger analysis.',
-                     finishedAt: Date.now()
-                 };
-                 // Similar error handling as above for Redis update failure
-                 try {
-                     await redis.set(jobId, JSON.stringify(configFailData));
-                 } catch (redisSetError) {
-                     console.error(`[Process Image Job ${jobId}] CRITICAL: Failed to update Redis status to 'failed' AFTER QStash config error! Error:`, redisSetError);
-                 }
-                 return res.status(200).json({ message: `Processing failed for Job ID ${jobId} due to configuration issue.` });
+                });
+                console.log(`[Process Image Job ${jobId}] LOCAL DEV: Background process fetch dispatched.`);
+                // --- End Local Fetch Trigger (Development) ---
             }
-            // --- End QStash Trigger ---
+            // --- End Conditional Trigger ---
 
-            // If publish was successful (or if QStash is disabled but we didn't hard-fail)
+            // Respond 200 OK immediately in either case (Prod QStash or Local Fetch)
             res.status(200).json({ message: 'Vision processing completed, analysis step triggered.' }); // Updated success message
             return; // Exit successfully
         } else {

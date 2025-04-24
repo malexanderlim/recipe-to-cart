@@ -133,6 +133,40 @@ These issues directly impact the core value proposition or the demo user experie
     *   Consider adding subtle background textures or gradients if time permits.
     *   Consider adding simple icons (e.g., upload, URL, checkmark, error) if time permits.
 
+---
+
+## P1: UI Facelift using Tailwind CSS (Inspired by shadcn/ui)
+
+**Goal:** Significantly improve the visual presentation and user experience of the frontend by adopting Tailwind CSS for styling, aiming for a clean, modern aesthetic similar to `shadcn/ui`.
+
+**Rationale:** Direct integration of `shadcn/ui` components is not feasible with the current vanilla JS/HTML frontend. Using Tailwind CSS directly allows us to leverage its utility-first approach to achieve a comparable visual style without requiring a React migration.
+
+**Tasks:**
+
+*   **[X] Setup Tailwind CSS:**
+    *   **[X]** Add `tailwindcss` as a dev dependency to the project (likely at the root or within `frontend/`). (Downgraded to v3.4.17)
+    *   **[X]** Initialize Tailwind: Create `tailwind.config.js` and a base CSS input file (e.g., `frontend/styles/input.css`).
+    *   **[X]** Configure `tailwind.config.js` to scan `frontend/index.html` and `frontend/script.js` for class names.
+    *   **[X]** Set up a build script (e.g., in `package.json` or manually run via CLI) to process `input.css` and generate `frontend/styles/output.css`. (Using `npx tailwindcss` via npm script)
+    *   **[ ]** Link `frontend/styles/output.css` in `frontend/index.html`.
+*   **[X] Refactor `frontend/index.html` with Tailwind Classes:**
+    *   **Overall Layout:** Apply Tailwind classes for container management, max-width, margins, padding, and background colors.
+    *   **Typography:** Use Tailwind utilities for font sizes, weights, and colors for headings and body text.
+    *   **Sections:** Style the main sections ("Add Recipes", "Review Extracted Ingredients", "Final Shopping List") using borders, padding, and background colors for clear visual separation.
+    *   **Form Elements:** Style the file input, URL input, and buttons using Tailwind classes for a consistent look and feel (including hover/focus states).
+    *   **Recipe Cards:** Refactor the structure and apply Tailwind classes for borders, padding, spacing, and layout within each recipe card display.
+    *   **Checkboxes/Toggles:** Style the ingredient deselection checkboxes and pantry toggle.
+    *   **Feedback Elements:** Style loading indicators, success messages, and error messages using Tailwind utilities for colors, borders, and padding.
+*   **[X] Apply Targeted Styling Improvements (Prioritized):**
+    *   **[X] 1. Style Final Shopping List (Section 3):** In `displayReviewList`, apply Tailwind classes to the `ul` and `li` elements, including checkboxes and labels, for better structure and visual consistency (`border`, `padding`, `spacing`, custom checkbox styles).
+    *   **[ ] 2. Enhance Error/Loading Feedback:** Style global error/loading messages (e.g., for URL input, Instacart interactions). Add visual indicators (e.g., spinners) to individual recipe card loading states (`renderSingleRecipeResult`). **(Current Task)**
+    *   **[ ] 3. Refine Pantry Checkbox Area:** Style the helper text (`text-xs`, `text-gray-500`) and apply consistent Tailwind styling to the master pantry checkbox.
+    *   **[ ] 4. Final Consistency Pass:** Review all sections for minor inconsistencies in padding, margins, font sizes, alignment, etc.
+*   **[ ] Cleanup:** Remove any existing custom CSS rules that are replaced by Tailwind utilities.
+*   **[ ] Testing:** Verify the appearance and responsiveness across different screen sizes (basic check).
+
+---
+
 ## P1: Important for Polish
 
 These improve the experience but are secondary to core functionality and feedback.
@@ -226,197 +260,6 @@ Valuable but not essential for the demo.
 *   **[ ] Selenium-based Validation:**
     *   **Idea:** Automatically compare generated list items against the final Instacart page for accuracy scoring.
     *   **Action:** Defer for post-demo.
-
-## Deployment to Vercel
-
-Steps to deploy the application to Vercel for Demo Day accessibility.
-
-1.  **[ ] Project Structure Check:**
-    *   Confirm directory layout (e.g., `frontend/`, `backend/`).
-    *   Verify `package.json` in relevant directories.
-2.  **[ ] Backend Configuration (`backend/server.js`):**
-    *   Ensure server export is Vercel-compatible (e.g., standard Node HTTP server or Express).
-    *   Check all dependencies are in `backend/package.json`.
-    *   Configure CORS if needed (likely required).
-3.  **[ ] Frontend Configuration (`frontend/script.js`):**
-    *   Update API calls to use relative paths (e.g., `/api/upload`) instead of `localhost`.
-    *   Ensure HTML links correctly to JS/CSS.
-4.  **[ ] Vercel Configuration (`vercel.json`):**
-    *   Create `vercel.json` in the project root.
-    *   Define `builds` for the backend (`@vercel/node`).
-    *   Define `routes` to serve frontend static files and route `/api/*` to the backend function.
-5.  **[ ] Environment Variables:**
-    *   Identify required secrets (API keys, Redis, Blob, Anthropic, **QStash Tokens**).
-    *   Add them via the Vercel project dashboard (do *not* commit to Git).
-6.  **[ ] Deployment Process:**
-    *   Push code to Git (GitHub/GitLab/Bitbucket).
-    *   Create Vercel project linked to the Git repo.
-    *   Configure Root Directory/Build settings if needed.
-    *   Add Environment Variables in Vercel UI.
-    *   Trigger deployment.
-7.  **[ ] Testing and Iteration:**
-    *   Test the `*.vercel.app` deployment URL end-to-end, **specifically the image upload -> QStash -> worker flow**.
-    *   Check API calls, Instacart integration, error handling.
-    *   Use Vercel logs and **Upstash QStash console** for debugging.
-
-## Testing Strategy & Evals
-
-*   **[ ] Define Test Set:** Create a small (5-10) but diverse set of recipe images (different formats, cuisines, unit types, complexity, items needing consolidation). Include edge cases (low quality image, non-recipe image).
-*   **[ ] Establish Baseline:** Run the test set through the *current* application and document:
-    *   LLM Output (structured ingredients pre-normalization).
-    *   Backend API Payload (sent to Instacart).
-    *   Generated Instacart List (screenshots/manual notes).
-*   **[ ] Manual Evaluation (Iterative):** As P0 fixes are implemented, re-run the test set and evaluate against the baseline using these metrics:
-    *   **Job Completion:** Does the processing complete successfully via QStash without getting stuck? (Yes/No)
-    *   **Consolidation:** Are duplicates correctly merged in the API payload? (Yes/No)
-    *   **Unit Normalization:** Is the normalized unit in the API payload appropriate and purchasable? (Score: Good/Acceptable/Bad per item)
-    *   **Quantity Normalization:** Is the quantity reasonable after normalization? (Score: Good/Acceptable/Bad per item)
-    *   **Instacart List - Item Match:** Does the final list contain the *intended* item? (% matched)
-    *   **Instacart List - Variant Match:** Is the matched item the correct *type* (dried vs fresh, whole vs minced)? (% correct variant)
-    *   **Instacart List - Completeness:** Are there unexpected missing or added items? (Count)
-    *   **UI/Error Feedback:** Does the UI clearly show progress, success, and handle errors gracefully? (Qualitative check)
-*   **[ ] Goal:** Aim for **100% job completion** via QStash and high scores (>80-90%) on Item Match and Variant Match for the test set, with clear UI feedback for all scenarios before the demo.
-
-**Execution Plan (Revised):**
-
-1.  **Implement QStash Migration (P0):**
-    *   Add dependency.
-    *   Configure Env Vars (locally and on Vercel).
-    *   Modify `/api/process-image` to publish to QStash.
-    *   Create `/api/process-text-worker` (controller/route) with QStash verification and migrated logic.
-    *   Configure QStash topic in Upstash Console.
-    *   Cleanup old `/api/process-text` endpoint and `fetchWithRetry`.
-    *   Test the new flow thoroughly.
-2.  **Review & Refine Backend Unit Normalization (P0/P1):** Address herb/wine/other specific normalization issues in `/api/create-list`.
-3.  **Implement Individual Timeout Handling (P0 Required UX):** Modify frontend to allow dismissing/retrying single timed-out recipe cards.
-4.  **Polish UI/UX (P1):** Simplify pantry text, refine layout. Deploy & Test.
-5.  **Final Demo Run-through.**
-6.  **Refactor Backend Codebase (P1):** Execute the modularization plan.
-7.  **Final Demo Run-through (Post-Refactor).**
-
-
----
-
-## P0: UI/UX Polish for Demo Day
-
-**Goal:** Enhance the visual design and user experience based on feedback for a polished demo. Focus on clarity, flow, and feedback.
-
-**Prioritized Checklist:**
-
-*   **[X] Layout & Hierarchy: Section Clarity:**
-    *   Clearly differentiate and label "Upload Recipe Image(s)" vs "Paste Recipe URL" inputs.
-    *   Organize content into visually distinct sections with clear headings (e.g., "1. Add Recipes", "2. Review Extracted Ingredients", "3. Final Shopping List").
-    *   Use visual containers (cards/panels) for each extracted recipe result under "Review Extracted Ingredients".
-*   **[X] Layout & Hierarchy: Prominent Actions:**
-    *   Ensure the "Review Final List" / "Create Instacart List" button is clearly visible and positioned logically at the end of the main workflow sections.
-*   **[X] Interaction & Feedback: Button Labels & Calls-to-Action:**
-    *   Review all button labels for clarity and action-orientation (e.g., "Add URL" vs. "Process Recipe URL", "Review Final List" vs. "Consolidate & Review").
-*   **[X] Interaction & Feedback: Input Handling (URL):**
-    *   Add frontend logic to automatically prepend `https://` if protocol is missing.
-    *   Provide clear, immediate feedback if the format is invalid.
-*   **[ ] Interaction & Feedback: Processing Feedback:**
-    *   Review and enhance visual feedback during image upload/URL processing (e.g., consistent spinners within cards, clearer status messages beyond just the internal state names).
-*   **[ ] Interaction & Feedback: Success/Error States:**
-    *   Ensure success messages (e.g., "Ingredients extracted!") and error messages are clearly displayed within the context of the specific recipe card/action.
-    *   **[ ] Improve Specific Error Message (URL Fallback):** Rephrase backend error "Fallback extraction failed..." to be more user-friendly (e.g., "No recipe found at [URL]...").
-*   **[ ] Interaction & Feedback: Ingredient Deselection:**
-    *   Verify that the checkboxes for deselecting ingredients in the "Extracted Recipes" section are easily visible and usable.
-*   **[ ] Visual Design: Color Scheme:**
-    *   Define and apply a simple, cohesive color scheme (e.g., primary action color, background/accent colors).
-*   **[ ] Visual Design: Spacing & Padding:**
-    *   Apply consistent padding/margins around sections, cards, and buttons for better visual separation.
-*   **[ ] Visual Design: Typography:**
-    *   Select and apply a clean, readable font pairing for headings and body text.
-*   **[ ] Layout & Hierarchy: Logical Flow:**
-    *   Review the overall step-by-step flow (Upload/URL -> Review -> Final List) to ensure it feels intuitive.
-*   **[ ] Interaction & Feedback: Placeholder Text:**
-    *   Add helpful placeholder text to the URL input field.
-*   **[ ] Responsive Design: Basic Check:**
-    *   Quickly check layout on a simulated mobile viewport to ensure major elements are usable and text is legible.
-*   **[ ] Visual Design: Subtle Enhancements (Lower Priority):**
-    *   Consider adding subtle background textures or gradients if time permits.
-    *   Consider adding simple icons (e.g., upload, URL, checkmark, error) if time permits.
-
----
-
-## P1: Important for Polish
-
-These improve the experience but are secondary to core functionality and feedback.
-
-*   **[X] Refine Layout & Flow:**
-    *   **Problem:** Pantry toggle placement is slightly awkward. Minor visual inconsistencies.
-    *   **Action:** Experiment with relocating the "Pantry Item Toggle" (e.g., below "2. Extracted Recipes" heading or inside "3. Create Instacart List" section). Perform a quick visual pass for consistent spacing, alignment, and element styling (buttons, cards, etc.).
-*   **[X] Review UI for Instacart Mark Usage:** Ensure the frontend uses the name "Instacart" appropriately (functional descriptions) and does not use any Instacart logos or branding in a way that implies endorsement, per Section 8 and 16.9 of the T&Cs. ([Source: Developer T&Cs](https://docs.instacart.com/developer_platform_api/guide/terms_and_policies/developer_terms/))
-*   **[X] Confirm T&C Compliance Aspects:** Perform a final read-through of the T&Cs, focusing on data handling and any specific limitations relevant to the Recipe-to-Cart use case, ensuring no planned features conflict. ([Source: Developer T&Cs](https://docs.instacart.com/developer_platform_api/guide/terms_and_policies/developer_terms/))
-*   **[ ] Refactor Backend (`backend/server.js`) for Modularity (P1):**
-    *   **Problem:** The `server.js` file is excessively long (1600+ lines), mixing routing, business logic, external API calls, and utility functions, hindering maintainability and testing.
-    *   **Refactoring Checklist & Status:**
-        *   **Dependencies (`require` statements):**
-            *   `[X] dotenv`: (`server.js` or config file) - Assumed still needed in main server file.
-            *   `[X] express`: (`server.js`, `routes/*`) - Present in routes.
-            *   `[X] cors`: (`server.js`) - Likely stays in main server file.
-            *   `[X] multer`: (`server.js`, `routes/uploadRoutes.js`) - Used in upload route.
-            *   `[X] google-auth-library`: (Handled implicitly by `@google-cloud/vision`) - Implicitly handled.
-            *   `[X] @google-cloud/vision`: (`services/googleVisionService.js`) - Service exists.
-            *   `[X] @anthropic-ai/sdk`: (`services/anthropicService.js`) - Service exists.
-            *   `[X] axios`: (`services/instacartService.js`) - Used in Instacart service.
-            *   `[X] heic-convert`: (`controllers/processImageController.js`) - Required in controller.
-            *   `[X] @vercel/blob`: (`controllers/uploadController.js`) - Required in upload controller.
-            *   `[X] crypto`: (Used across controllers/utils) - Standard Node module.
-            *   `[X] @vercel/kv`: (`services/kvService.js`, `controllers/*`) - Service exists, used in controllers.
-            *   `[X] jsdom`: (`controllers/urlJobController.js`) - Required in controller.
-            *   `[X] @mozilla/readability`: (`controllers/urlJobController.js`) - Required in controller.
-            *   `[X] cheerio`: (`utils/recipeParser.js`, `controllers/urlJobController.js`) - Required in utils and controller.
-            *   `[X] @upstash/redis`: (`services/redisService.js`, `controllers/*`) - Service exists, used in controllers.
-        *   **Initializations:**
-            *   `[X] Upstash Redis Client (`redis`)`: (`services/redisService.js` -> imported) - Service exists.
-            *   `[X] Vercel KV Client (`kvClient`)`: (`services/kvService.js` -> imported) - Service exists (handles mock logic).
-            *   `[X] Anthropic Client (`anthropic`)`: (`services/anthropicService.js` -> imported) - Service exists.
-            *   `[X] Express App (`app`)`: (`server.js`) - Stays in main server file.
-            *   `[X] Multer Middleware (`upload`)`: (`server.js`, `routes/uploadRoutes.js`) - Defined in server, used in route.
-            *   `[X] Google Vision Client (`visionClient`)`: (`services/googleVisionService.js` -> imported) - Service exists.
-        *   **Middleware Setup:**
-            *   `[X] cors()`: (`server.js`) - Stays in main server file.
-            *   `[X] express.json()`: (`server.js`) - Stays in main server file.
-            *   `[X] express.urlencoded()`: (`server.js`) - Stays in main server file.
-        *   **Helper Functions:**
-            *   `[X] callAnthropic()`: (`services/anthropicService.js` -> imported) - Service exists.
-            *   `[X] updateJobStatus()`: (`services/kvService.js` -> imported, Redis direct updates) - KV helper exists, Redis logic in controllers.
-            *   `[X] parseAndCorrectJson()`: (`utils/jsonUtils.js` -> imported) - Utils file exists.
-            *   `[X] simpleNormalize()`: (Logic moved to `controllers/listController.js`) - Logic exists within controller.
-            *   `[X] parseYieldString()`: (Copied to `controllers/urlJobController.js`) - Present within controller.
-            *   `[X] findRecipe()` (nested within `/api/process-url-job`): (`controllers/urlJobController.js`) - Present within controller.
-        *   **Route Handlers (Controller Logic):**
-            *   `[X] POST /api/upload` logic: (`controllers/uploadController.js`) - Controller exists.
-            *   `[X] POST /api/process-image` logic: (`controllers/processImageController.js`) - Controller exists.
-            *   `[X] GET /api/job-status` logic: (`controllers/jobStatusController.js`) - Controller exists.
-            *   `[X] POST /api/create-list` logic: (`controllers/listController.js`) - Controller exists.
-            *   `[X] POST /api/send-to-instacart` logic: (`controllers/instacartController.js`) - Controller exists.
-            *   `[X] POST /api/process-text` logic: (`controllers/processTextController.js`) - Controller exists.
-            *   `[X] POST /api/process-url` logic: (`controllers/urlController.js`) - Controller exists.
-            *   `[X] POST /api/process-url-job` logic: (`controllers/urlJobController.js`) - Controller exists.
-            *   `[X] GET /` logic: (`server.js`) - Stays in main server file.
-        *   **Routing Setup (`app.post`, `app.get`):**
-            *   `[X] POST /api/upload`: (`routes/uploadRoutes.js`) - Route file exists.
-            *   `[X] POST /api/process-image`: (`routes/processImageRoutes.js`) - Route file exists.
-            *   `[X] GET /api/job-status`: (`routes/jobStatusRoutes.js`) - Route file exists.
-            *   `[X] POST /api/create-list`: (`routes/listRoutes.js`) - Route file exists.
-            *   `[X] POST /api/send-to-instacart`: (`routes/instacartRoutes.js`) - Route file exists.
-            *   `[X] POST /api/process-text`: (`routes/processTextRoutes.js`) - Route file exists.
-            *   `[X] POST /api/process-url`: (`routes/urlRoutes.js`) - Route file exists.
-            *   `[X] POST /api/process-url-job`: (`routes/urlJobRoutes.js`) - Route file exists.
-            *   `[X] GET /`: (`server.js`) - Stays in main server file.
-        *   **Server Start (`app.listen`):**
-            *   `[X]` (`server.js`) - Stays in main server file.
-
-## P2: Future Enhancements
-
-Valuable but not essential for the demo.
-
-*   **[ ] Selenium-based Validation:**
-    *   **Idea:** Automatically compare generated list items against the final Instacart page for accuracy scoring.
-    *   **Action:** Defer for post-demo.
-*   **[ ] Enhance Instacart API Error Handling (429):** Improve error handling in `backend/services/instacartService.js` to detect HTTP 429 (Too Many Requests) errors specifically and provide a user-friendly message, acknowledging potential API rate limits per T&C Section 10.
 
 ## Deployment to Vercel
 

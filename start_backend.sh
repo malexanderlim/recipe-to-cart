@@ -37,4 +37,5 @@ fi
 
 # Start the server
 echo "Starting backend server..."
+export NODE_ENV=development # Set environment to development for local run
 node server.js 

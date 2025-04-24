@@ -204,8 +204,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!recipeDiv) {
             recipeDiv = document.createElement('div');
             recipeDiv.id = recipeData.id;
-            // Use the new card class
-            recipeDiv.classList.add('recipe-card'); 
+            // Use the new card class - Apply Tailwind classes
+            recipeDiv.classList.add('recipe-card', 'bg-white', 'p-4', 'rounded-lg', 'shadow', 'mb-4'); 
             recipeResultsContainer.appendChild(recipeDiv);
         }
 
@@ -220,14 +220,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isNaN(currentDisplayValue)) { currentDisplayValue = quantity; } // Fallback
 
             yieldControlsHTML = `
-                <div class="scale-yield-controls"> 
-                    <label for="yield-input-${recipeData.id}">Scale Yield:</label>
-                    <div class="yield-buttons">
-                        <button data-recipe-id="${recipeData.id}" class="yield-decrement" aria-label="Decrease yield">-</button>
-                        <button data-recipe-id="${recipeData.id}" class="yield-increment" aria-label="Increase yield">+</button>
+                <div class="scale-yield-controls flex items-center gap-2 mt-2 mb-3 flex-wrap">
+                    <label for="yield-input-${recipeData.id}" class="text-sm font-medium text-gray-700 whitespace-nowrap">Scale Recipe:</label>
+                    <div class="yield-buttons flex">
+                        <button data-recipe-id="${recipeData.id}" class="yield-decrement bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-2 rounded-l" aria-label="Decrease yield">-</button>
+                        <button data-recipe-id="${recipeData.id}" class="yield-increment bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-2 rounded-r" aria-label="Increase yield">+</button>
                     </div>
-                    <input type="number" id="yield-input-${recipeData.id}" data-recipe-id="${recipeData.id}" value="${currentDisplayValue}" min="1" step="1" aria-labelledby="yield-label-${recipeData.id}">
-                    <span class="yield-unit-label" id="yield-label-${recipeData.id}">${unit || ''} (Original: ${quantity})</span>
+                    <input type="number" id="yield-input-${recipeData.id}" data-recipe-id="${recipeData.id}" value="${currentDisplayValue}" min="1" step="1" aria-labelledby="yield-label-${recipeData.id}" class="w-12 px-2 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                    <span class="yield-unit-label text-sm text-gray-600 ml-1" id="yield-label-${recipeData.id}">${unit || ''} <span class="text-xs">(Original: ${quantity})</span></span>
                 </div>
             `;
         }
@@ -247,9 +247,8 @@ document.addEventListener('DOMContentLoaded', () => {
                      // Optional: Prefix other errors for clarity
                      displayError = `Error: ${displayError}`;
                 }
-                ingredientsHTML = `<p class="error">${displayError}</p>`; // Use error class
-            } else if (recipeData.ingredients && recipeData.ingredients.length > 0) { // Check ingredients exist
-                // Render ingredients with checkboxes
+                ingredientsHTML = `<p class="error text-red-600 p-2 bg-red-50 rounded-md">${displayError}</p>`; // Use error class
+            } else if (recipeData.ingredients && recipeData.ingredients.length > 0) {
                 ingredientsHTML = renderParsedIngredientsHTML(recipeData);
             } else {
                 // Handle case where processing finished but no ingredients found (not an error)
@@ -356,49 +355,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // UPDATED: Returns an HTML string for the ingredients list with checkboxes
     function renderParsedIngredientsHTML(recipeData) {
-        if (!recipeData.ingredients || recipeData.ingredients.length === 0) {
-            return '<p>No ingredients parsed.</p>';
-        }
-        // Ensure scaleFactor is valid
-        const scaleFactor = (typeof recipeData.scaleFactor === 'number' && !isNaN(recipeData.scaleFactor)) ? recipeData.scaleFactor : 1;
-
-        const listItems = recipeData.ingredients.map((item, index) => {
-            let displayQuantity = '';
-            if (item.quantity !== null && typeof item.quantity === 'number') {
-                const scaledValue = item.quantity * scaleFactor;
-                // Format nicely: Round to 2 decimal places, remove trailing .00, remove trailing 0 *after decimal*
-                displayQuantity = scaledValue.toFixed(2);
-                if (displayQuantity.endsWith('.00')) { 
-                    displayQuantity = displayQuantity.slice(0, -3); // Remove .00
-                } else if (displayQuantity.includes('.') && displayQuantity.endsWith('0')) {
-                    displayQuantity = displayQuantity.slice(0, -1); // Remove trailing 0 only if there's a decimal
-                }
-                // Ensure it's a string for display
-                displayQuantity = displayQuantity.toString(); 
+        // Apply Tailwind classes to title and sub-heading
+        let html = `<h4 class="text-lg font-semibold mb-1">${recipeData.title || 'Recipe'}</h4>`;
+        html += `<h5 class="text-base font-medium text-gray-600 mb-2">Parsed Ingredients:</h5>`;
+        // Apply Tailwind list styling (optional, can add list-disc etc. if desired)
+        html += '<ul class="ingredients-list space-y-1">'; 
+        recipeData.ingredients.forEach((item, index) => {
+            // *** ADD DEFENSIVE CHECK for item and item.ingredient ***
+            if (!item || typeof item.ingredient === 'undefined') {
+                console.warn(`[Pantry Check] Skipping invalid item at index ${index} for recipe ${recipeData.id}:`, item);
+                return; // Skip this iteration
             }
-            const unit = item.unit || '';
-            const ingredient = item.ingredient || '';
-            const text = `${displayQuantity} ${unit} ${ingredient}`.replace(/\s+/g, ' ').trim();
-            
-            // Unique ID for the checkbox and label association
-            const checkboxId = `ingredient-${recipeData.id}-${index}`;
-            // Track original index for filtering later
-            const ingredientIndex = index; 
-            
-            // Default checked state can be stored in recipeData if needed later, for now default true
-            const isChecked = item.checked === undefined ? true : item.checked; // Add a checked state to the item data
+            // *** END CHECK ***
 
-            return `
-                <li class="ingredient-item">
-                    <input type="checkbox" id="${checkboxId}" data-recipe-id="${recipeData.id}" data-ingredient-index="${ingredientIndex}" ${isChecked ? 'checked' : ''}>
-                    <label for="${checkboxId}">${text}</label>
-                </li>
-            `;
-        }).join(''); // Join list items into a single string
-
-        // Return the UL element containing the list items
-        // No surrounding div needed if UL has the class directly
-        return `<ul class="ingredient-list">${listItems}</ul>`;
+            const ingredientNameLower = (item.ingredient || '').toLowerCase(); // Now safe to access
+            // Check if the ingredient name contains any common keyword
+            const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
+            
+            if (isCommon) {
+                // Update the data (ensure item object exists)
+                if (item) item.checked = shouldBeChecked;
+                
+                // Update the corresponding checkbox in the DOM
+                const checkboxElement = document.getElementById(`ingredient-${recipeData.id}-${index}`);
+                if (checkboxElement) {
+                    checkboxElement.checked = shouldBeChecked;
+                }
+            }
+        });
+        html += '</ul>';
+        return html;
     }
     
     // Handler for clicking on list item (li) to toggle checkbox
@@ -560,7 +546,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const list = document.createElement('ul');
-        list.classList.add('review-ingredient-list'); 
+        list.classList.add('review-ingredient-list', 'border', 'border-gray-300', 'rounded', 'p-4', 'space-y-2'); 
         console.log("[displayReviewList] Created UL element.");
 
         // ingredients is now expected to be [{name: ..., line_item_measurements: [{unit, quantity}, ...]}, ...]
@@ -568,7 +554,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ingredients.forEach((item, index) => {
                 console.log(`[displayReviewList] Processing item ${index}:`, JSON.parse(JSON.stringify(item)));
                 const li = document.createElement('li');
-                li.classList.add('ingredient-item'); 
+                li.classList.add('ingredient-item', 'flex', 'items-center', 'space-x-2'); 
                 
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
@@ -634,6 +620,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const label = document.createElement('label');
                 label.htmlFor = `review-ingredient-${index}`;
                 label.textContent = displayText;
+                label.classList.add('text-gray-700');
                 
                 console.log(`[displayReviewList] Item ${index} - Appending checkbox and label to LI.`);
                 li.appendChild(checkbox);
@@ -659,7 +646,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Change button text
         sendButton.textContent = 'Create Instacart Shopping List'; 
         // Apply the same class as the final link for similar styling
-        sendButton.classList.add('instacart-link-button'); 
+        sendButton.classList.add('instacart-link-button', 'bg-blue-500', 'hover:bg-blue-700', 'text-white', 'font-bold', 'py-2', 'px-4', 'rounded', 'focus:outline-none', 'focus:shadow-outline'); 
         sendButton.dataset.originalTitle = originalTitle; // Store title for later use
         sendButton.addEventListener('click', handleSendToInstacart);
         console.log("[displayReviewList] Appending Send button.");
@@ -967,7 +954,14 @@ document.addEventListener('DOMContentLoaded', () => {
             // --- Original logic applied to recipeInfo --- 
             if (recipeInfo.ingredients && recipeInfo.ingredients.length > 0) {
                 recipeInfo.ingredients.forEach((item, index) => {
-                    const ingredientNameLower = (item.ingredient || '').toLowerCase(); // Use item.ingredient
+                    // *** ADD DEFENSIVE CHECK for item and item.ingredient ***
+                    if (!item || typeof item.ingredient === 'undefined') {
+                        console.warn(`[Pantry Check] Skipping invalid item at index ${index} for recipe ${recipeInfo.id}:`, item);
+                        return; // Skip this iteration
+                    }
+                    // *** END CHECK ***
+
+                    const ingredientNameLower = (item.ingredient || '').toLowerCase(); // Now safe to access
                     // Check if the ingredient name contains any common keyword
                     const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
                     
@@ -1185,31 +1179,49 @@ document.addEventListener('DOMContentLoaded', () => {
     if (addUrlButton && recipeUrlInput) {
         const handleUrlSubmit = () => {
             console.log('Attempting URL submit...');
-            let url = recipeUrlInput.value.trim(); // Changed const to let
-            // Clear previous error message
+            let url = recipeUrlInput.value.trim(); 
+            
             if(urlErrorMessageDiv) {
                 urlErrorMessageDiv.textContent = '';
                 urlErrorMessageDiv.style.display = 'none';
             }
             
-            if (url) {
-                // Auto-heal: Prepend https:// if protocol is missing
-                if (!url.toLowerCase().startsWith('http://') && !url.toLowerCase().startsWith('https://')) {
-                    console.log('Protocol missing, prepending https:// to:', url);
-                    url = 'https://' + url;
-                }
-                
-                console.log('Processing URL:', url);
-                processSingleUrl(url); // Call the function now defined inside
-                recipeUrlInput.value = ''; // Clear input after adding
-            } else {
+            // *** Use validator.js for Robust Validation ***
+            if (!url) {
                 console.log('URL input was empty.');
-                // Optionally show an error for empty input
-                // if (urlErrorMessageDiv) {
-                //     urlErrorMessageDiv.textContent = 'Please enter a URL.';
-                //     urlErrorMessageDiv.style.display = 'block';
-                // }
+                if (urlErrorMessageDiv) {
+                    urlErrorMessageDiv.textContent = 'Please enter a URL.';
+                    urlErrorMessageDiv.style.display = 'block';
+                }
+                return; // Stop if empty
             }
+
+            // Define validation options
+            const validationOptions = {
+                protocols: ['http','https'], // Require http or https
+                require_protocol: true,
+                require_valid_protocol: true,
+                require_host: true, 
+                // require_tld: true, // Ensure it has a TLD like .com, .org (might be too strict for some cases?)
+                validate_length: true
+            };
+
+            // Check if the URL is valid using the library
+            if (validator.isURL(url, validationOptions)) {
+                console.log('Validator.js: URL format appears valid:', url);
+                console.log('Proceeding to process URL:', url);
+                processSingleUrl(url); 
+                recipeUrlInput.value = ''; // Clear input only on successful validation/start
+            } else {
+                // URL is invalid according to validator.js
+                console.log('Validator.js: Invalid URL format entered:', url);
+                if (urlErrorMessageDiv) {
+                    urlErrorMessageDiv.textContent = 'Invalid URL format. Please enter a full, valid web address (e.g., https://example.com).';
+                    urlErrorMessageDiv.style.display = 'block';
+                }
+                // Do not proceed if format is invalid
+            }
+            // *** End validator.js usage ***
         };
 
         addUrlButton.addEventListener('click', handleUrlSubmit);

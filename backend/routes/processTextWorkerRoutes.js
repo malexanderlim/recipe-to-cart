@@ -11,49 +11,57 @@ const receiver = new Receiver({
     nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
 });
 
-router.post('/',
-    // REMOVE express.raw() - Assume body is already parsed by Vercel/Express default
-    async (req, res, next) => { 
-        try {
-            console.log('[QStash Verify - Receiver v2] Verifying QStash signature...');
-            const signature = req.headers['upstash-signature'];
-            if (!signature) {
-                console.error('[QStash Verify - Receiver v2] Missing Upstash-Signature header.');
-                return res.status(401).send('Unauthorized: Missing Signature');
-            }
-            
-            // Log the type and content of req.body as received
-            console.log('[QStash Verify - Receiver v2] Type of req.body received:', typeof req.body);
-            console.log('[QStash Verify - Receiver v2] Value of req.body received:', req.body);
+// Define the verification middleware function
+const verifyQstashSignature = async (req, res, next) => {
+    console.log('[QStash Verify Middleware] Checking environment...');
+    // Only run verification in production
+    if (process.env.NODE_ENV !== 'production') {
+        console.log('[QStash Verify Middleware] Skipping verification in non-production environment.');
+        return next(); // Skip verification middleware if not in production
+    }
 
-            // Re-stringify the already parsed body for verification
-            let bodyAsString;
-            try {
-                 bodyAsString = JSON.stringify(req.body);
-                 console.log('[QStash Verify - Receiver v2] Body re-serialized for verification:', bodyAsString);
-            } catch (stringifyError) {
-                console.error('[QStash Verify - Receiver v2] Failed to re-stringify req.body:', stringifyError);
-                 return res.status(400).send('Bad Request: Could not process request body.');
-            }
-            
-            const isValid = await receiver.verify({
-                signature: signature,
-                body: bodyAsString, // Use the re-serialized string
-            });
-
-            if (isValid) {
-                console.log('[QStash Verify - Receiver v2] Signature verified successfully.');
-                // No need to parse again, req.body is already an object
-                next(); 
-            } else {
-                console.error('[QStash Verify - Receiver v2] Invalid signature detected.');
-                res.status(401).send('Unauthorized: Invalid Signature');
-            }
-        } catch (error) {
-            console.error('[QStash Verify - Receiver v2] Error during verification:', error);
-            res.status(500).send('Internal Server Error during signature verification');
+    // Production verification logic:
+    try {
+        console.log('[QStash Verify - Receiver v2] Verifying QStash signature...');
+        const signature = req.headers['upstash-signature'];
+        if (!signature) {
+            console.error('[QStash Verify - Receiver v2] Missing Upstash-Signature header.');
+            return res.status(401).send('Unauthorized: Missing Signature');
         }
-    },
+        
+        console.log('[QStash Verify - Receiver v2] Type of req.body received:', typeof req.body);
+        console.log('[QStash Verify - Receiver v2] Value of req.body received:', req.body);
+
+        let bodyAsString;
+        try {
+             bodyAsString = JSON.stringify(req.body);
+             console.log('[QStash Verify - Receiver v2] Body re-serialized for verification:', bodyAsString);
+        } catch (stringifyError) {
+            console.error('[QStash Verify - Receiver v2] Failed to re-stringify req.body:', stringifyError);
+             return res.status(400).send('Bad Request: Could not process request body.');
+        }
+        
+        const isValid = await receiver.verify({
+            signature: signature,
+            body: bodyAsString, 
+        });
+
+        if (isValid) {
+            console.log('[QStash Verify - Receiver v2] Signature verified successfully.');
+            next(); 
+        } else {
+            console.error('[QStash Verify - Receiver v2] Invalid signature detected.');
+            res.status(401).send('Unauthorized: Invalid Signature');
+        }
+    } catch (error) {
+        console.error('[QStash Verify - Receiver v2] Error during verification:', error);
+        res.status(500).send('Internal Server Error during signature verification');
+    }
+};
+
+// Apply the middleware conditionally
+router.post('/',
+    verifyQstashSignature, // Apply the conditional middleware
     processTextWorkerController.handleProcessText 
 );
 
