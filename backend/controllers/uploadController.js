@@ -47,7 +47,7 @@ async function handleUpload(req, res) {
         const initialJobData = {
             status: 'pending',
             originalFilename: originalFilename,
-            blobUrl: blobUrl, // Store the URL to the image in Blob
+            imageUrl: blobUrl, // FIX: Use 'imageUrl' key to match processImageController
             createdAt: Date.now()
         };
         await redis.set(jobId, JSON.stringify(initialJobData), { ex: 3600 }); // Use object { ex: seconds }
