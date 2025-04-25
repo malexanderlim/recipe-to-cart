@@ -112,7 +112,7 @@ These issues directly impact the core value proposition or the demo user experie
     *   Review the overall step-by-step flow (Upload/URL -> Review -> Final List) to ensure it feels intuitive.
 *   **[ ] Interaction & Feedback: Placeholder Text:**
     *   Add helpful placeholder text to the URL input field.
-*   **[ ] Responsive Design: Basic Check:**
+*   **[X] Responsive Design: Basic Check:**
     *   Quickly check layout on a simulated mobile viewport to ensure major elements are usable and text is legible.
 *   **[ ] Visual Design: Subtle Enhancements (Lower Priority):**
     *   Consider adding subtle background textures or gradients if time permits.
@@ -124,6 +124,16 @@ These issues directly impact the core value proposition or the demo user experie
     *   **[X] 4. Remove Single Recipe Card ('X' Button):** Allow users to dismiss individual failed/timed-out cards.
     *   **[X] 5. Transitions (Fade-in):** Add subtle transitions for new elements appearing.
     *   **[X] 6. Dynamic Title for Final List:** Display "Ingredients for [Recipe A] and [Recipe B]..." above the final list.
+*   **[X] Fix Final Button Click Error (JSON Parsing):**
+    *   **Problem:** Clicking "Shop with Instacart" fails with a JSON parsing error because `handleSendToInstacart` tries to read ingredient data from the `<li>` element's dataset instead of the checkbox's dataset where it's stored.
+    *   **Action:** Modify `handleSendToInstacart` in `script.js` to correctly select the checkbox within each list item and parse `checkbox.dataset.itemData`. **(DONE)**
+*   **[X] Fix Final Button Visual Layout (Systematic Debugging):**
+    *   **Problem:** The "Shop with Instacart" button does not visually match the spec (incorrect height/padding/alignment).
+    *   **Action 1 (Inspect Element):** Use browser DevTools to inspect the computed styles (`height`, `padding`, `box-sizing`, `align-items`, `line-height`) and applied CSS rules for the button (`#sendToInstacartButton`), the SVG (`img`), and the text (`span`). Verify they match the intended values (46px height, 16px vertical pad, 18px horizontal pad, flex center, etc.) and identify any conflicting styles. **(DONE - Identified conflicting rule in style.css)**
+    *   **Action 2 (Isolate CSS):** Temporarily comment out the link to `style.css` in `index.html`, rebuild Tailwind CSS (`npm run build:css`), and check if the button renders correctly with only Tailwind styles. If it does, the conflict lies within `style.css`. **(DONE - Confirmed conflict)**
+    *   **(If needed) Action 3 (Simplify Structure):** Temporarily remove the SVG or the text span from the button HTML to see if either element alone renders correctly within the button's dimensions.
+    *   **(If needed) Action 4 (Verify Tailwind Build):** Check `frontend/styles/output.css` to ensure the custom classes (`.h-46px`, `.px-18px`) are defined correctly.
+    *   **Action 5 (Implement Fix):** Based on the findings, apply the necessary fix (e.g., remove conflicting CSS, adjust Tailwind classes, fix HTML structure). **(DONE - Removed conflicting rule from style.css)**
 
 ---
 
@@ -140,22 +150,22 @@ These issues directly impact the core value proposition or the demo user experie
     *   **[X]** Initialize Tailwind: Create `tailwind.config.js` and a base CSS input file (e.g., `frontend/styles/input.css`).
     *   **[X]** Configure `tailwind.config.js` to scan `frontend/index.html` and `frontend/script.js` for class names.
     *   **[X]** Set up a build script (e.g., in `package.json` or manually run via CLI) to process `input.css` and generate `frontend/styles/output.css`. (Using `npx tailwindcss` via npm script)
-    *   **[ ]** Link `frontend/styles/output.css` in `frontend/index.html`.
+    *   **[X]** Link `frontend/styles/output.css` in `frontend/index.html`.
 *   **[X] Refactor `frontend/index.html` with Tailwind Classes:**
     *   **Overall Layout:** Apply Tailwind classes for container management, max-width, margins, padding, and background colors.
     *   **Typography:** Use Tailwind utilities for font sizes, weights, and colors for headings and body text.
     *   **Sections:** Style the main sections ("Add Recipes", "Review Extracted Ingredients", "Final Shopping List") using borders, padding, and background colors for clear visual separation.
     *   **Form Elements:** Style the file input, URL input, and buttons using Tailwind classes for a consistent look and feel (including hover/focus states).
     *   **Recipe Cards:** Refactor the structure and apply Tailwind classes for borders, padding, spacing, and layout within each recipe card display.
-    *   **Checkboxes/Toggles:** Style the ingredient deselection checkboxes and pantry toggle.
-    *   **Feedback Elements:** Style loading indicators, success messages, and error messages using Tailwind utilities for colors, borders, and padding.
+    *   **[X]** Checkboxes/Toggles: Style the ingredient deselection checkboxes and pantry toggle.
+    *   **[X]** Feedback Elements: Style loading indicators, success messages, and error messages using Tailwind utilities for colors, borders, and padding.
 *   **[X] Apply Targeted Styling Improvements (Prioritized):**
-    *   **[X] 1. Style Final Shopping List (Section 3):** In `displayReviewList`, apply Tailwind classes to the `ul` and `li` elements, including checkboxes and labels, for better structure and visual consistency (`border`, `padding`, `spacing`, custom checkbox styles).
-    *   **[X] 2. Enhance Error/Loading Feedback:** Style global error/loading messages (e.g., for URL input, Instacart interactions). Add visual indicators (e.g., spinners) to individual recipe card loading states (`renderSingleRecipeResult`).
-    *   **[X] 3. Refine Pantry Checkbox Area:** Style the helper text (`text-xs`, `text-gray-500`) and apply consistent Tailwind styling to the master pantry checkbox.
-    *   **[X] 4. Final Consistency Pass:** Review all sections for minor inconsistencies in padding, margins, font sizes, alignment, etc.
-*   **[ ] Cleanup:** Remove any existing custom CSS rules that are replaced by Tailwind utilities.
-*   **[ ] Testing:** Verify the appearance and responsiveness across different screen sizes (basic check).
+    *   **[X]** 1. Style Final Shopping List (Section 3): In `displayReviewList`, apply Tailwind classes to the `ul` and `li` elements, including checkboxes and labels, for better structure and visual consistency (`border`, `padding`, `spacing`, custom checkbox styles).
+    *   **[X]** 2. Enhance Error/Loading Feedback:** Style global error/loading messages (e.g., for URL input, Instacart interactions). Add visual indicators (e.g., spinners) to individual recipe card loading states (`renderSingleRecipeResult`).
+    *   **[X]** 3. Refine Pantry Checkbox Area:** Style the helper text (`text-xs`, `text-gray-500`) and apply consistent Tailwind styling to the master pantry checkbox.
+    *   **[X]** 4. Final Consistency Pass:** Review all sections for minor inconsistencies in padding, margins, font sizes, alignment, etc.
+*   **[ ] Cleanup:** Remove any existing custom CSS rules that are replaced by Tailwind utilities. (Deferred post-demo due to risk of breaking styles).
+*   **[X] Testing:** Verify the appearance and responsiveness across different screen sizes (basic check).
 
 ---
 
@@ -484,7 +494,4 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
 
 1.  [X] Add new dependencies (`jsdom`, `@mozilla/readability`, `cheerio`) to `backend/package.json`.
 2.  [X] Implement In-Memory KV Mock for Local Development in `backend/server.js`.
-3.  [X] Implement backend endpoints (`/api/process-url`, `/api/process-url-job`) and worker logic, using the (potentially mocked) KV store.
-4.  [X] Implement frontend changes (UI elements, JS logic for triggering and polling).
-5.  [X] Develop and test specialized LLM prompts for JSON-LD ingredients and fallback text extraction (including yield object).
-6.  [X] Thorough testing with diverse URLs (including provided example, JSON-LD sites, non-recipe sites, sites needing login) **both locally and on Vercel**. 
+3.  [X] Implement backend endpoints (`
