@@ -213,9 +213,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error(`[Recipe ${recipeId}] Error initiating upload for ${file.name}:`, error);
             recipeDataObj.error = `Upload Error: ${error.message}`;
-            displayError(`Failed to start processing for ${file.name}.`); // General error message
+            // displayError(`Failed to start processing for ${file.name}.`); // REMOVE THIS LINE - Function not defined and renderSingleRecipeResult handles card-specific error
             // Update the specific recipe block with the error
-            renderSingleRecipeResult(recipeDataObj, false); // isLoading = false to show error
+            renderSingleRecipeResult(recipeDataObj, false); // This will show the error in the card
             updateCreateListButtonState(); // Re-evaluate button state after error
         }
         updateEmptyStateVisibility(); // Call helper as recipeData is updated
@@ -239,25 +239,29 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- Status Mapping ---
         let displayStatus = loadingMessage;
         if (isLoading) {
-            // --- UPDATED: Show a consistent "in progress" message --- 
-            if (internalStatus && internalStatus !== 'completed' && internalStatus !== 'failed' && internalStatus !== 'not_found') {
-                displayStatus = 'Recipe analysis in progress... please wait'; 
-            } else {
-                displayStatus = loadingMessage; // Fallback for initial upload or if status is unknown
-            }
-            // --- END UPDATE ---
-            /* --- REMOVED --- 
+            // FIX: Map internal statuses to user-friendly messages
             switch (internalStatus) {
                 case 'pending':
+                case 'processing_vision': // Group pending and vision processing
                     displayStatus = 'Processing image...';
                     break;
                 case 'vision_completed':
+                case 'processing_text': // Add status from the next worker if available
                     displayStatus = 'Analyzing ingredients...';
                     break;
+                // Add cases for URL processing if needed
+                case 'fetching_html':
+                case 'parsing_jsonld':
+                case 'parsing_readability':
+                case 'llm_parsing_ingredients':
+                case 'llm_parsing_fallback':
+                    displayStatus = 'Processing recipe URL...';
+                    break;
                 default:
-                    displayStatus = loadingMessage; // Fallback (e.g., 'Uploading...')
+                    // Keep the initial message (e.g., 'Initializing upload...') or a generic processing message
+                    // if status is unknown or null during loading.
+                    displayStatus = loadingMessage || 'Processing...'; 
             }
-            */
         }
         let recipeDiv = document.getElementById(recipeData.id);
         if (!recipeDiv) {
@@ -1297,9 +1301,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     createPantryCheckbox();
                 }
 
-            } else if (data.status === 'pending' || data.status === 'vision_completed' || data.status === 'processing_started' || data.status === 'fetching_html' || data.status === 'parsing_jsonld' || data.status === 'llm_parsing_ingredients' || data.status === 'parsing_readability' || data.status === 'llm_parsing_fallback' ) { // Added URL statuses
-                // Continue polling, check max attempts
-                // DO NOT render final state here - handled by timeout or next successful poll
+            } else if (data.status === 'pending' || 
+                       data.status === 'processing_vision' || // <<< ADD 'processing_vision' HERE
+                       data.status === 'vision_completed' || 
+                       data.status === 'processing_text' || // Add status from the next worker
+                       data.status === 'processing_started' || 
+                       data.status === 'fetching_html' || 
+                       data.status === 'parsing_jsonld' || 
+                       data.status === 'llm_parsing_ingredients' || 
+                       data.status === 'parsing_readability' || 
+                       data.status === 'llm_parsing_fallback' ) { 
+                // These are all valid intermediate statuses, just continue polling.
+                // The UI was already updated at the start of the function.
             } else if (data.status === 'not_found') {
                 console.error(`[Recipe ${recipeId}] Job ID ${jobId} not found. Stopping polling.`);
                 stopPolling(recipeId, 'Processing job data lost. Please try again.');

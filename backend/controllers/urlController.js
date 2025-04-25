@@ -1,109 +1,94 @@
 const crypto = require('crypto');
-// Dynamic import to avoid adding node-fetch to globals in all envs
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { redis } = require('../services/redisService');
+const { Client } = require('@upstash/qstash'); // Import QStash Client
 
-// --- Helper function to trigger background job --- 
-async function triggerBackgroundJob(jobId) {
-    const port = process.env.PORT || 3001; 
-    const isVercel = process.env.VERCEL === '1';
-    
-    // Construct absolute URL for fetch
-    let triggerUrl;
-    if (isVercel) {
-        // Ensure VERCEL_URL starts with https://
-        const baseUrl = process.env.VERCEL_URL.startsWith('http') 
-            ? process.env.VERCEL_URL 
-            : `https://${process.env.VERCEL_URL}`;
-        triggerUrl = `${baseUrl}/api/process-url-job`;
-    } else {
-        triggerUrl = `http://localhost:${port}/api/process-url-job`;
-    }
+// Initialize QStash Client
+const qstashClient = new Client({ token: process.env.QSTASH_TOKEN });
 
-    console.log(`[${jobId}] Triggering background job at: ${triggerUrl}`);
-    
-    try {
-        // Fire-and-forget fetch
-        fetch(triggerUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                // Add internal trigger secret header if needed for security
-                // 'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret' 
-            },
-            body: JSON.stringify({ jobId }),
-        }).catch(fetchError => {
-            // Log the error but don't crash the main request
-            console.error(`[${jobId}] ASYNC CATCH: Error triggering background job (fetch failed):`, fetchError);
-            // Optionally: Update Redis status to failed here if trigger fails critically
-            // updateJobStatusRedis(jobId, 'failed', { error: `Failed to trigger background processing task: ${fetchError.message}` });
-        });
-        console.log(`[${jobId}] Background job fetch dispatched.`);
-    } catch (error) {
-        // This catch block might not be strictly necessary for fire-and-forget
-        // but kept for safety during refactor.
-        console.error(`[${jobId}] Error initiating background job fetch:`, error);
-        // Don't update status here as the initial request might succeed
-    }
-}
-
-// --- Controller function for POST /api/process-url --- 
 async function processUrl(req, res) {
     const { url } = req.body;
-    let jobId = `url-${crypto.randomUUID()}`; 
-    console.log(`[${jobId}] Received request for /api/process-url`);
+    console.log(`[Process URL ${url}] Received request.`);
 
-    if (!url) {
-        console.log(`[${jobId}] Invalid request: URL is missing.`);
-        return res.status(400).json({ error: 'URL is required' });
+    // Basic validation (could be improved with a library like validator.js)
+    if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+        console.error(`[Process URL] Invalid URL received: ${url}`);
+        return res.status(400).json({ error: 'Invalid or missing URL.' });
+    }
+    if (!process.env.QSTASH_TOKEN) {
+         return res.status(500).json({ message: 'Server configuration error: Missing QStash token.' });
     }
 
-    let validatedUrl;
-    try {
-        validatedUrl = new URL(url);
-        if (!['http:', 'https:'].includes(validatedUrl.protocol)) {
-             throw new Error('URL must use http or https protocol');
-        }
-    } catch (error) {
-        console.log(`[${jobId}] Invalid request: URL format error - ${error.message}`);
-        return res.status(400).json({ error: `Invalid URL format: ${error.message}` });
-    }
-
-    const jobData = {
-        status: 'pending',
-        inputUrl: url,
-        startTime: Date.now(),
-        sourceType: 'url' // Differentiate from image jobs
-    };
+    const jobId = crypto.randomUUID();
+    console.log(`[Process URL Job ${jobId}] Generated for URL: ${url}`);
 
     try {
-        // Use Redis client
-        if (!redis) { 
-            throw new Error('Redis client not available in urlController'); 
-        }
-        
-        console.log(`[${jobId}] Step 1: Attempting redis.set...`);
-        // Store as stringified JSON, set expiration (e.g., 24 hours)
-        await redis.set(jobId, JSON.stringify(jobData), { ex: 86400 }); 
-        console.log(`[${jobId}] Step 2: Initial job data set in Redis for URL: ${url}`);
+        // 1. Store initial job state in Redis
+        console.log(`[Process URL Job ${jobId}] Storing initial job state in Redis...`);
+        if (!redis) { throw new Error('Redis client not initialized'); }
+        const initialJobData = {
+            status: 'pending',
+            inputUrl: url, // Use key 'inputUrl'
+            jobId: jobId,
+            createdAt: new Date().toISOString()
+        };
+        // Use correct syntax for expiry
+        await redis.set(jobId, JSON.stringify(initialJobData), { ex: 3600 }); 
+        console.log(`[Process URL Job ${jobId}] Initial job state stored.`);
 
-        // Trigger background job (fire-and-forget)
-        await triggerBackgroundJob(jobId);
-
-        console.log(`[${jobId}] Step 3: Attempting to send 202 response...`);
-        res.status(202).json({ jobId });
-        console.log(`[${jobId}] Step 4: Successfully sent 202 response.`);
-
-    } catch (error) { 
-        console.error(`[${jobId}] SYNC CATCH: Error in /api/process-url handler:`, error);
-        // Attempt to clean up Redis if the initial set succeeded but something else failed?
-        // Potentially: await redis.del(jobId);
-        if (!res.headersSent) {
-             console.log(`[${jobId}] Sending 500 error response to client.`);
-             res.status(500).json({ error: 'Failed to initiate URL processing job' });
+        // 2. Trigger /api/process-url-job via QStash
+        // Construct base URL correctly (Rule #1)
+        let baseUrl;
+        if (process.env.APP_BASE_URL) {
+            baseUrl = process.env.APP_BASE_URL;
+        } else if (process.env.VERCEL_URL) {
+            baseUrl = `https://${process.env.VERCEL_URL}`;
         } else {
-             console.error(`[${jobId}] Headers already sent, could not send 500 error response.`);
+            console.error(`[Process URL Job ${jobId}] CRITICAL: Cannot determine base URL. APP_BASE_URL and VERCEL_URL are missing.`);
+            throw new Error('Server configuration error: Base URL not set.');
         }
+        const targetWorkerUrl = `${baseUrl}/api/process-url-job`;
+
+        // Safeguard check (Rule #1)
+        if (!targetWorkerUrl.startsWith('http')) {
+             console.error(`[Process URL Job ${jobId}] Invalid QStash target URL constructed: ${targetWorkerUrl}. Check APP_BASE_URL/VERCEL_URL.`);
+             await redis.set(jobId, JSON.stringify({ 
+                 ...initialJobData, 
+                 status: 'failed', 
+                 error: 'Server config error: Invalid callback URL.' 
+             }), { ex: 3600 });
+             return res.status(202).json({ jobId }); // Still 202, but job is marked failed
+        }
+
+        try {
+            await qstashClient.publishJSON({
+                url: targetWorkerUrl,
+                body: { jobId },
+                headers: { 'Content-Type': 'application/json' },
+            });
+            console.log(`[Process URL Job ${jobId}] Published job to QStash targeting ${targetWorkerUrl}`);
+        } catch (qstashError) {
+            console.error(`[Process URL Job ${jobId}] Failed to publish job to QStash:`, qstashError);
+            await redis.set(jobId, JSON.stringify({ 
+                ...initialJobData, 
+                status: 'failed', 
+                error: 'Failed to initiate URL processing via QStash.' 
+            }), { ex: 3600 });
+            return res.status(202).json({ jobId }); // Still 202, but job is marked failed
+        }
+
+        // 3. Respond 202 Accepted
+        res.status(202).json({ jobId: jobId });
+        console.log(`[Process URL Job ${jobId}] Sent 202 Accepted to client.`);
+
+    } catch (error) {
+        console.error(`[Process URL Job ${jobId}] Error during initial setup:`, error);
+        // Attempt to clean up Redis entry if setup failed badly
+        try {
+             if (redis) { await redis.del(jobId); }
+        } catch (redisDelError) {
+             console.error(`[Process URL Job ${jobId}] Failed to clean up Redis on error:`, redisDelError);
+        }
+        res.status(500).json({ error: 'Failed to initiate URL processing.', details: error.message });
     }
 }
 
