@@ -210,24 +210,45 @@ const processUrlJobWorker = async (req, res) => {
 
                 if (article && article.textContent) {
                     console.log(`[Worker - URL Job ${jobId}] Readability extracted content. Length: ${article.textContent.length}. Calling LLM...`);
-                    const llmPrompt = `Extract the recipe title, yield (as quantity and unit, e.g., "4 servings", "1 loaf"), and ingredients (each as a string in an array) from the following text. Only return a JSON object with keys "title", "yield_string", "ingredients".\n\nTEXT:\n${article.textContent.substring(0, 15000)}`; // Limit context size
                     
-                    const llmResponse = await callAnthropic(llmPrompt, 0.5); // Use imported helper
-                    const parsedLlmJson = parseAndCorrectJson(llmResponse);
+                    // --- System Prompt asking for yield OBJECT (like old controller) ---
+                    const systemPrompt = `Extract the recipe title, yield object { quantity, unit }, and a JSON array of ingredients [{quantity, unit, ingredient}] from the provided text. Output ONLY a single valid JSON object with keys "title", "yield", and "ingredients". Ensure perfect JSON syntax.`;
+                    const userPrompt = article.textContent.substring(0, 18000); // Limit context size for user content
+                    
+                    const llmResponse = await callAnthropic(systemPrompt, userPrompt); 
+                    const parsedLlmJson = parseAndCorrectJson(llmResponse); // Changed variable name for clarity
 
                     if (parsedLlmJson?.ingredients?.length > 0) {
-                         const ingredients = parsedLlmJson.ingredients.map(ing => ({ raw: ing, source: 'llm' }));
-                         recipeResult = {
-                            title: parsedLlmJson.title || article.title || 'Recipe from URL',
-                            yield: parseYieldString(parsedLlmJson.yield_string),
-                            ingredients: ingredients,
-                            sourceUrl: finalUrl,
-                            extractedVia: 'fallback-llm'
-                         };
-                         console.log(`[Worker - URL Job ${jobId}] Extracted recipe via Readability + LLM.`);
+                         const ingredients = parsedLlmJson.ingredients
+                             .filter(o => o && typeof o === 'object' && (o.name || o.ingredient) && String(o.ingredient || o.name).trim())
+                             .map(ing => ({ 
+                                 quantity: ing.quantity ?? null, 
+                                 unit: ing.unit ?? null, 
+                                 ingredient: ing.ingredient || ing.name 
+                             })); // Use cleaned ingredients logic
+
+                         if (ingredients.length > 0) { // Check if ingredients remain after filtering
+                             // --- Process yield OBJECT directly (like old controller) ---
+                             const parsedYield = parsedLlmJson.yield && typeof parsedLlmJson.yield === 'object'
+                               ? { quantity: parsedLlmJson.yield.quantity ?? null, unit: parsedLlmJson.yield.unit ?? null }
+                               : null;
+                             // --- End yield processing ---
+
+                             recipeResult = {
+                                title: parsedLlmJson.title || article.title || 'Recipe from URL',
+                                yield: parsedYield, // Assign the directly processed yield object
+                                ingredients: ingredients,
+                                sourceUrl: finalUrl,
+                                extractedVia: 'fallback-llm'
+                             };
+                             console.log(`[Worker - URL Job ${jobId}] Extracted recipe via Readability + LLM.`);
+                         } else {
+                              console.warn(`[Worker - URL Job ${jobId}] LLM fallback returned ingredients, but none were valid after filtering.`);
+                              throw new Error("Fallback extraction via LLM failed: No valid ingredients found after cleaning.")
+                         }
                     } else {
-                        console.warn(`[Worker - URL Job ${jobId}] LLM fallback did not return usable ingredients.`);
-                        throw new Error("Fallback extraction via LLM failed to find ingredients.")
+                        console.warn(`[Worker - URL Job ${jobId}] LLM fallback did not return usable ingredients array.`);
+                        throw new Error("Fallback extraction via LLM failed to find ingredients array.")
                     }
                 } else {
                     console.warn(`[Worker - URL Job ${jobId}] Readability could not extract meaningful content.`);
