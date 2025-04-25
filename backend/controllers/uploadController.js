@@ -29,6 +29,21 @@ async function handleUpload(req, res) {
     console.log(`[Async Upload] Generated Job ID: ${jobId}`);
 
     try {
+        // --- Determine Base URL ---
+        const isVercel = process.env.VERCEL === '1';
+        let baseUrl;
+        if (isVercel && process.env.VERCEL_URL) {
+            // Ensure VERCEL_URL starts with https://
+            baseUrl = process.env.VERCEL_URL.startsWith('http') 
+                ? process.env.VERCEL_URL 
+                : `https://${process.env.VERCEL_URL}`;
+        } else {
+            // Fallback for local development or other environments
+            baseUrl = `${req.protocol}://${req.get('host')}`;
+        }
+        console.log(`[Async Upload Job ${jobId}] Determined base URL: ${baseUrl}`);
+        // --------------------------
+
         // 1. Upload image buffer to Vercel Blob
         console.log(`[Async Upload Job ${jobId}] Uploading image to Vercel Blob...`);
         const blobResult = await put(originalFilename, buffer, {
@@ -38,69 +53,44 @@ async function handleUpload(req, res) {
         const blobUrl = blobResult.url;
         console.log(`[Async Upload Job ${jobId}] Image uploaded to: ${blobUrl}`);
 
-        // 2. Store initial job state in Upstash Redis
+        // 2. Store initial job state in Upstash Redis (including baseUrl)
         console.log(`[Async Upload Job ${jobId}] Storing initial job state in Redis...`);
         if (!redis) { throw new Error('Redis client not initialized'); }
         if (!qstashClient) { throw new Error('QStash client not initialized'); }
         const initialJobData = {
             status: 'pending',
             originalFilename: originalFilename,
-            blobUrl: blobUrl, // Store the URL to the image in Blob
-            createdAt: Date.now()
+            blobUrl: blobUrl,
+            createdAt: Date.now(),
+            baseUrl: baseUrl // Store the determined base URL
         };
-        await redis.set(jobId, JSON.stringify(initialJobData), { ex: 86400 }); // Use redis.set with stringify
-        console.log(`[Async Upload Job ${jobId}] Initial job state stored.`);
+        await redis.set(jobId, JSON.stringify(initialJobData), { ex: 86400 });
+        console.log(`[Async Upload Job ${jobId}] Initial job state stored (including base URL).`);
 
-        // 3. Trigger background processing via QStash
-        const imageWorkerUrl = process.env.QSTASH_IMAGE_WORKER_URL;
-        if (!imageWorkerUrl) {
-            console.error(`[Async Upload Job ${jobId}] CRITICAL: QSTASH_IMAGE_WORKER_URL environment variable not set.`);
-            // Update Redis status to failed, but still return 202 to the user for consistency? Or return 500?
-            // For now, update Redis and proceed with 202, but log critical error.
-             const configFailData = {
-                 status: 'failed',
-                 error: 'Server configuration error preventing job start.', // More generic internal error
-                 originalFilename: originalFilename,
-                 createdAt: initialJobData.createdAt,
-                 finishedAt: Date.now()
-             };
-             await redis.set(jobId, JSON.stringify(configFailData));
-             console.log(`[Async Upload Job ${jobId}] Updated Redis status to failed due to missing QStash URL.`);
-             // Still return 202 as the initial request *was* accepted, even if backend fails immediately
-             return res.status(202).json({ jobId: jobId });
-             // Alternatively, could return 500:
-             // return res.status(500).json({ error: 'Server configuration error preventing job start.' });
-        }
+        // 3. Trigger background processing via QStash (using dynamic URL)
+        const imageWorkerUrl = `${baseUrl}/api/process-image-worker`; // Construct dynamically
 
-        console.log(`[Async Upload Job ${jobId}] Publishing job to QStash queue targeting: ${imageWorkerUrl}`);
+        console.log(`[Async Upload Job ${jobId}] Publishing job to QStash queue targeting dynamically constructed URL: ${imageWorkerUrl}`);
 
         try {
             await qstashClient.publishJSON({
-                url: imageWorkerUrl,
-                // topic: 'process-image-jobs', // Or use a topic name if defined
+                url: imageWorkerUrl, // Use dynamically constructed URL
                 body: { jobId: jobId },
-                // Optional: Set headers if needed by the worker for verification beyond signature
-                // headers: { 'Content-Type': 'application/json' },
-                 retries: 5, // Example: configure retries
-                 delay: '1s' // Example: slight delay
+                retries: 5,
+                delay: '1s'
             });
             console.log(`[Async Upload Job ${jobId}] Job published successfully to QStash.`);
         } catch (qstashError) {
             console.error(`[Async Upload Job ${jobId}] CRITICAL: Error publishing job to QStash:`, qstashError);
-            // Update Redis status to failed if QStash publish fails critically
-             const publishFailData = {
-                 status: 'failed',
-                 error: 'Failed to queue job for processing. Please try again.', // User-friendly message
-                 originalFilename: originalFilename,
-                 createdAt: initialJobData.createdAt,
-                 finishedAt: Date.now()
+            const publishFailData = {
+                ...initialJobData, // Use the data we just stored
+                status: 'failed',
+                error: 'Failed to queue job for processing via QStash. Please try again.',
+                finishedAt: Date.now()
              };
              await redis.set(jobId, JSON.stringify(publishFailData));
              console.log(`[Async Upload Job ${jobId}] Updated Redis status to failed due to QStash publish error.`);
-             // Again, return 202 as the initial request was accepted, but log critical backend failure
-             return res.status(202).json({ jobId: jobId });
-             // Alternatively, return 500:
-             // return res.status(500).json({ error: 'Failed to queue job for processing.' });
+             return res.status(202).json({ jobId: jobId }); // Still return 202
         }
 
         // 4. Return 202 Accepted with the Job ID

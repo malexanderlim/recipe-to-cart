@@ -17,7 +17,7 @@ async function handleProcessImageJob(req, res) {
     let jobData; // For storing retrieved job data
 
     try {
-        // 1. Retrieve job details (blobUrl) from Redis
+        // 1. Retrieve job details (blobUrl, baseUrl) from Redis
         console.log(`[Process Image Worker Job ${jobId}] Retrieving job data from Redis...`);
         if (!redis) { throw new Error('Redis client not initialized'); }
         const jobDataStr = await redis.get(jobId);
@@ -26,7 +26,13 @@ async function handleProcessImageJob(req, res) {
             return res.status(404).send('Not Found: Job data missing'); // Don't retry
         }
         jobData = JSON.parse(jobDataStr);
-        const { blobUrl, originalFilename } = jobData;
+        const { blobUrl, originalFilename, baseUrl } = jobData;
+
+        if (!baseUrl) {
+            // If baseUrl wasn't stored for some reason, we can't proceed reliably
+            console.error(`[Process Image Worker Job ${jobId}] CRITICAL: baseUrl missing from job data in Redis.`);
+            throw new Error('Configuration error: baseUrl missing from job data.');
+        }
 
         // Check if job is already processed or failed
         if (jobData.status !== 'pending') {
@@ -116,26 +122,23 @@ async function handleProcessImageJob(req, res) {
         const visionCompleteData = {
             ...jobData,
             status: 'vision_completed',
-            extractedText: extractedText, // Store extracted text for the next step
+            extractedText: extractedText,
             visionFinishedAt: Date.now()
         };
         await redis.set(jobId, JSON.stringify(visionCompleteData));
         console.log(`[Process Image Worker Job ${jobId}] Redis status updated to vision_completed.`);
 
-        // Trigger the next worker (/api/process-text-worker)
-        const textWorkerUrl = process.env.QSTASH_TEXT_WORKER_URL;
-        if (!textWorkerUrl) {
-            // This is a server configuration error, should fail critically
-            throw new Error('QSTASH_TEXT_WORKER_URL environment variable not set.');
-        }
+        // Trigger the next worker (/api/process-text-worker) using dynamic URL
+        const textWorkerUrl = `${baseUrl}/api/process-text-worker`; // Construct dynamically
+
         if (!qstashClient) {
             throw new Error('QStash client not initialized');
         }
 
-        console.log(`[Process Image Worker Job ${jobId}] Publishing job to QStash text worker queue targeting: ${textWorkerUrl}`);
+        console.log(`[Process Image Worker Job ${jobId}] Publishing job to QStash text worker queue targeting dynamically constructed URL: ${textWorkerUrl}`);
         try {
             await qstashClient.publishJSON({
-                url: textWorkerUrl,
+                url: textWorkerUrl, // Use dynamically constructed URL
                 body: { jobId: jobId },
                 retries: 3
             });
