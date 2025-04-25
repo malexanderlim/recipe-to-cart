@@ -71,8 +71,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Elements related to pantry checkbox (will be created dynamically) ---
     let pantryCheckbox = null;
 
-    // --- Add this log --- 
-    console.log("Checking createListButton element before adding listener:", createListButton);
+    // Spinner SVG definition (reusable) - DEFINED EARLY
+    const spinnerSVG = `
+        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-700 inline-block align-middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+    `;
 
     imageUploadInput.addEventListener('change', handleMultipleImageUpload);
     
@@ -94,7 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function setLoadingState(isLoading, fileCount = 0) {
         if (isLoading) {
             // *** Modify loading text ***
-            loadingIndicator.textContent = `Processing ${fileCount} file(s)...`; // Keep generic for now, covers initial/add
+            loadingIndicator.innerHTML = `${spinnerSVG} Processing ${fileCount} file(s)...`; // Keep generic for now, covers initial/add
             loadingIndicator.style.display = 'block';
             errorMessageDiv.textContent = ''; // Clear general error message
             errorMessageDiv.style.display = 'none';
@@ -211,12 +216,15 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderSingleRecipeResult(recipeData, isLoading = false, loadingMessage = 'Processing...', internalStatus = null) {
         
         // *** Define Spinner SVG at the top ***
+        // MOVED spinnerSVG definition higher up in the scope
+        /*
         const spinnerSVG = `
             <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-700 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
         `;
+        */
 
         // --- Status Mapping ---
         let displayStatus = loadingMessage;
@@ -954,7 +962,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
         if (existingCheckboxDiv) {
             existingCheckboxDiv.remove();
-            pantryCheckbox = null; // Clear the reference
         }
         updateEmptyStateVisibility(); // Call helper instead
     }
@@ -967,7 +974,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const sendButton = document.getElementById('send-to-instacart-button');
 
         if (instacartLoadingIndicator) { 
-            instacartLoadingIndicator.textContent = isLoading ? 'Sending to Instacart...' : '';
+            // Use innerHTML to include spinner
+            instacartLoadingIndicator.innerHTML = isLoading ? `${spinnerSVG} Sending to Instacart...` : '';
             instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
         }
         
@@ -977,6 +985,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (isLoading) {
+            // Clear previous results when starting to load
             if (instacartErrorMessageDiv) {
                 instacartErrorMessageDiv.textContent = '';
                 instacartErrorMessageDiv.style.display = 'none';
@@ -1604,61 +1613,4 @@ function displayImagePreview(file) {
         p.textContent = `File selected: ${file.name} (Preview not available)`;
     }
     imagePreviewArea.appendChild(p); // Append the paragraph (with image or just text)
-}
-
-function setInstacartLoadingState(isLoading) {
-    const instacartLoadingIndicator = document.getElementById('instacart-loading-indicator');
-    const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-    const instacartLinkArea = document.getElementById('instacart-link-area');
-    const sendButton = document.getElementById('send-to-instacart-button');
-
-    if (instacartLoadingIndicator) { 
-        instacartLoadingIndicator.textContent = isLoading ? 'Sending to Instacart...' : '';
-        instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
-    }
-    
-    // Manage button state based on loading
-    if (sendButton) {
-         sendButton.disabled = isLoading; // Disable while loading
-    }
-
-    if (isLoading) {
-        if (instacartErrorMessageDiv) {
-            instacartErrorMessageDiv.textContent = '';
-            instacartErrorMessageDiv.style.display = 'none';
-        }
-        if (instacartLinkArea) {
-             instacartLinkArea.innerHTML = ''; 
-        }
-    }
-}
-
-function displayInstacartError(message) {
-    const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-    const sendButton = document.getElementById('send-to-instacart-button');
-    if(instacartErrorMessageDiv) {
-        instacartErrorMessageDiv.textContent = message;
-        instacartErrorMessageDiv.style.display = 'block';
-    }
-    // Re-enable button on error
-    if (sendButton) {
-         sendButton.disabled = false;
-    }
-}
-
-function clearInstacartResults() {
-    const instacartLinkArea = document.getElementById('instacart-link-area');
-    const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-    const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
-    
-    if(instacartLinkArea) instacartLinkArea.innerHTML = '';
-    if(instacartErrorMessageDiv) {
-        instacartErrorMessageDiv.textContent = '';
-        instacartErrorMessageDiv.style.display = 'none';
-    }
-    // Also ensure the button is visible/enabled when clearing results (e.g., before a new attempt)
-    if (sendButton) {
-        sendButton.style.display = 'inline-block'; // Ensure it's visible if it was hidden
-        sendButton.disabled = false; 
-    }
 } 

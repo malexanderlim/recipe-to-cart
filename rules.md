@@ -30,10 +30,13 @@ This document outlines key rules and best practices to follow during development
     *   **Rule:** Before finalizing *any* code edit, mentally (or using diff tools) verify the *exact* changes being made. Pay special attention when modifying lists (like dependencies, routes, imports) or configuration blocks to ensure only the intended additions, deletions, or modifications are occurring, and that essential existing items are not accidentally removed.
     *   **Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit. 
 
-7.  **Variable Scope and Shadowing:**
-    *   **Problem:** Accidentally re-declaring a variable within an inner scope (e.g., using `let` or `const` with the same name as a global or outer-scoped variable) can lead to ReferenceErrors (Temporal Dead Zone - TDZ) or unexpected behavior due to variable shadowing. This also applies to making up variable names that don't exist in the intended scope.
-    *   **Rule:** When accessing global or outer-scoped variables from within a function or block, **do not** re-declare a variable with the same name using `let` or `const` within that inner scope. Use the existing variable name directly. **Verify** that the variable names being used actually exist in the intended scope.
-    *   **Verification:** Before finalizing an edit, check if any `let` or `const` declarations introduce a variable name that already exists in an accessible outer scope, especially if the intention is to modify the outer variable. Double-check variable names against their declarations. 
+7.  **Variable Scope, Shadowing, and Declaration Order:**
+    *   **Problem:** Accidentally re-declaring a variable within an inner scope (shadowing) or accessing `const`/`let` variables before their declaration (Temporal Dead Zone - TDZ) can lead to ReferenceErrors or unexpected behavior. This also applies to making up variable names that don't exist in the intended scope.
+    *   **Rule:** 
+        *   When accessing global or outer-scoped variables, **do not** re-declare a variable with the same name using `let` or `const` within that inner scope. Use the existing variable name directly.
+        *   Within a given scope, variables/constants declared with `const` or `let` **must be declared *before*** any code that attempts to access them is executed. Ensure constants/variables are declared at the top of their relevant scope or at least before their first use.
+        *   **Verify** that the variable names being used actually exist in the intended scope.
+    *   **Verification:** Before finalizing an edit, check for variable shadowing and ensure all variables/constants are declared before they are accessed within their scope. Double-check variable names against their declarations.
 
 8.  **Check for Existing Functionality:**
     *   **Problem:** Creating new modules, services, or functions without checking if similar functionality already exists leads to code duplication, increased maintenance burden, and potential inconsistencies.
