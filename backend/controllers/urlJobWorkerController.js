@@ -69,6 +69,54 @@ function findRecipeJsonLd(data) {
     return null;
 }
 
+// --- NEW HELPER: Robust LLM JSON Parsing (from text worker) ---
+function parseLlmJsonRobust(jobId, rawJsonResponse) {
+    if (!rawJsonResponse || typeof rawJsonResponse !== 'string') {
+        console.warn(`[${jobId}] LLM response was empty or not a string.`);
+        return null;
+    }
+    try {
+        const jsonMatch = rawJsonResponse.match(/```json\s*([\s\S]*?)\s*```/);
+        let jsonString = rawJsonResponse.trim();
+        if (jsonMatch && jsonMatch[1]) {
+            jsonString = jsonMatch[1].trim();
+            console.log(`[${jobId}] Extracted JSON from markdown code block.`);
+        } else if (rawJsonResponse.startsWith('{') && rawJsonResponse.endsWith('}')) {
+            console.log(`[${jobId}] LLM response appears to be direct JSON object.`);
+        } else if (rawJsonResponse.startsWith('[') && rawJsonResponse.endsWith(']')) {
+            console.log(`[${jobId}] LLM response appears to be direct JSON array.`);
+        } else {
+            const jsonStartIndex = rawJsonResponse.indexOf('{');
+            const jsonEndIndex = rawJsonResponse.lastIndexOf('}');
+            const arrayStartIndex = rawJsonResponse.indexOf('[');
+            const arrayEndIndex = rawJsonResponse.lastIndexOf(']');
+            
+            if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
+                jsonString = rawJsonResponse.substring(jsonStartIndex, jsonEndIndex + 1);
+                console.log(`[${jobId}] Extracted potential JSON object substring.`);
+            } else if (arrayStartIndex !== -1 && arrayEndIndex !== -1 && arrayEndIndex > arrayStartIndex) {
+                 jsonString = rawJsonResponse.substring(arrayStartIndex, arrayEndIndex + 1);
+                 console.log(`[${jobId}] Extracted potential JSON array substring.`);
+            } else {
+                // If no clear JSON structure is found, attempt to parse the whole string
+                // Might fail, but worth a try before giving up
+                console.warn(`[${jobId}] Could not reliably extract JSON structure, attempting to parse whole response.`);
+            }
+        }
+        
+        const parsedData = JSON.parse(jsonString);
+        console.log(`[${jobId}] Successfully parsed robustly extracted JSON.`);
+        return parsedData;
+
+    } catch (parseError) {
+        console.error(`[${jobId}] Error parsing LLM JSON response robustly:`, parseError);
+        console.error(`[${jobId}] Raw Response causing robust parse error:\n---\n${rawJsonResponse}\n---`);
+        // Return null if parsing fails, let the calling function handle it
+        return null; 
+    }
+}
+// --- END NEW HELPER ---
+
 // --- Main Worker Logic ---
 const processUrlJobWorker = async (req, res) => {
     // --- QStash Verification ---
@@ -155,22 +203,24 @@ const processUrlJobWorker = async (req, res) => {
                         else if (Array.isArray(rawYield) && rawYield.length) parsedYield = parseYieldString(String(rawYield[0]));
                     }
 
-                    // --- Reintroduce LLM call for JSON-LD ingredients --- 
+                    // --- LLM call for JSON-LD ingredients --- 
                     console.log(`[Worker - URL Job ${jobId}] Found ${ingredientStrings.length} ingredients via JSON-LD. Parsing with LLM...`);
                     await updateUrlJobStatus(jobId, 'llm_parsing_jsonld_ingredients'); 
                     const sysPrompt = 'You are an expert ingredient parser... Respond ONLY with JSON array.'; // Use appropriate prompt
                     const userPrompt = 'Ingredient List:\n' + ingredientStrings.map((s) => `- ${s}`).join('\n');
                     
-                    const llmResp = await callAnthropic(sysPrompt, userPrompt); // Use appropriate settings
-                    const parsedIngredients = await parseAndCorrectJson(llmResp, 'array'); // Use jsonUtils
+                    const llmResp = await callAnthropic(sysPrompt, userPrompt); 
+                    // --- Use ROBUST parsing helper --- 
+                    const parsedIngredients = parseLlmJsonRobust(jobId, llmResp); 
+                    // --- End ROBUST parsing --- 
 
-                    if (parsedIngredients && parsedIngredients.length) {
+                    if (parsedIngredients && Array.isArray(parsedIngredients) && parsedIngredients.length) {
                         const cleanIngredients = parsedIngredients
-                            .filter(o => o && typeof o === 'object' && (o.name || o.ingredient)) // Similar filter as old controller
+                            .filter(o => o && typeof o === 'object' && (o.name || o.ingredient)) 
                             .map(o => ({ 
                                 quantity: o.quantity ?? null, 
                                 unit: o.unit ?? null, 
-                                ingredient: o.ingredient || o.name // Prefer ingredient, fallback name
+                                ingredient: o.ingredient || o.name 
                              }));
 
                         if (cleanIngredients.length) {
@@ -186,7 +236,7 @@ const processUrlJobWorker = async (req, res) => {
                             console.warn(`[Worker - URL Job ${jobId}] LLM parsing of JSON-LD ingredients yielded no valid items.`);
                         }
                     } else {
-                        console.warn(`[Worker - URL Job ${jobId}] LLM failed to parse ingredients from JSON-LD strings.`);
+                        console.warn(`[Worker - URL Job ${jobId}] LLM parsing of JSON-LD ingredients yielded null or empty array.`);
                     }
                      // --- End LLM Call --- 
                 } else {
@@ -211,14 +261,15 @@ const processUrlJobWorker = async (req, res) => {
                 if (article && article.textContent) {
                     console.log(`[Worker - URL Job ${jobId}] Readability extracted content. Length: ${article.textContent.length}. Calling LLM...`);
                     
-                    // --- System Prompt asking for yield OBJECT (like old controller) ---
                     const systemPrompt = `Extract the recipe title, yield object { quantity, unit }, and a JSON array of ingredients [{quantity, unit, ingredient}] from the provided text. Output ONLY a single valid JSON object with keys "title", "yield", and "ingredients". Ensure perfect JSON syntax.`;
                     const userPrompt = article.textContent.substring(0, 18000); // Limit context size for user content
                     
                     const llmResponse = await callAnthropic(systemPrompt, userPrompt); 
-                    const parsedLlmJson = parseAndCorrectJson(llmResponse); // Changed variable name for clarity
+                    // --- Use ROBUST parsing helper --- 
+                    const parsedLlmJson = parseLlmJsonRobust(jobId, llmResponse);
+                    // --- End ROBUST parsing --- 
 
-                    if (parsedLlmJson?.ingredients?.length > 0) {
+                    if (parsedLlmJson && typeof parsedLlmJson === 'object' && !Array.isArray(parsedLlmJson) && parsedLlmJson?.ingredients?.length > 0) {
                          const ingredients = parsedLlmJson.ingredients
                              .filter(o => o && typeof o === 'object' && (o.name || o.ingredient) && String(o.ingredient || o.name).trim())
                              .map(ing => ({ 
@@ -247,8 +298,8 @@ const processUrlJobWorker = async (req, res) => {
                               throw new Error("Fallback extraction via LLM failed: No valid ingredients found after cleaning.")
                          }
                     } else {
-                        console.warn(`[Worker - URL Job ${jobId}] LLM fallback did not return usable ingredients array.`);
-                        throw new Error("Fallback extraction via LLM failed to find ingredients array.")
+                        console.warn(`[Worker - URL Job ${jobId}] LLM fallback did not return usable ingredients object/array.`);
+                        throw new Error("Fallback extraction via LLM failed: Invalid structure or no ingredients.")
                     }
                 } else {
                     console.warn(`[Worker - URL Job ${jobId}] Readability could not extract meaningful content.`);
