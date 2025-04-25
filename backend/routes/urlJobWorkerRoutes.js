@@ -1,9 +1,12 @@
 const express = require('express');
-const { processUrlJobWorker } = require('../controllers/urlJobWorkerController');
+const { 
+    verifyQstashSignature, 
+    processUrlJobWorkerHandler 
+} = require('../controllers/urlJobWorkerController');
 
 const router = express.Router();
 
-// This route will be the target for the QStash topic 'url-processing-jobs'
-router.post('/', processUrlJobWorker);
+// Apply QStash verification middleware first, then the handler
+router.post('/process-url-job-worker', verifyQstashSignature, processUrlJobWorkerHandler);
 
 module.exports = router; 

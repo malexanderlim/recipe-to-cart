@@ -14,12 +14,6 @@ if (!process.env.QSTASH_TOKEN) {
 }
 const qstashClient = process.env.QSTASH_TOKEN ? new Client({ token: process.env.QSTASH_TOKEN }) : null;
 
-// Define the target QStash topic/URL for the image worker
-const IMAGE_WORKER_QSTASH_TARGET_URL = process.env.QSTASH_IMAGE_WORKER_URL;
-if (!IMAGE_WORKER_QSTASH_TARGET_URL && qstashClient) {
-    console.warn("QSTASH_IMAGE_WORKER_URL environment variable not set. Cannot publish to image worker.");
-}
-
 /**
  * Handle image upload and initiate asynchronous processing via QStash
  * Creates a job ID, stores the image in Vercel Blob, and publishes a job to QStash
@@ -70,27 +64,30 @@ async function handleUpload(req, res) {
         if (!qstashClient) {
             throw new Error("QStash client not initialized. Cannot trigger background job.");
         }
-        // --- Dynamically construct the target URL ---
-        let imageWorkerTargetUrl;
-        if (process.env.VERCEL_URL) {
-            imageWorkerTargetUrl = `https://${process.env.VERCEL_URL}/api/process-image-worker`;
-        } else if (process.env.NODE_ENV !== 'production') {
-            // Fallback for local development (use req object if available)
+        
+        // --- Dynamically Construct Target URL --- 
+        let targetWorkerUrl;
+        const isVercel = process.env.VERCEL === '1';
+        const workerPath = '/api/process-image-worker';
+        if (isVercel && process.env.VERCEL_URL) {
+            targetWorkerUrl = `https://${process.env.VERCEL_URL}${workerPath}`;
+        } else if (!isVercel) {
+            // Construct URL from request headers for local development
             const host = req.get('host');
             const protocol = req.protocol;
             if (host && protocol) {
-                imageWorkerTargetUrl = `${protocol}://${host}/api/process-image-worker`;
-                console.log(`[QStash Upload Job ${jobId}] Local Dev: Constructed target URL: ${imageWorkerTargetUrl}`);
+                 targetWorkerUrl = `${protocol}://${host}${workerPath}`;
             } else {
-                throw new Error("Cannot determine local target URL for image worker.");
+                 throw new Error("Could not determine host/protocol for local worker URL.");
             }
-        } else {
-             throw new Error("VERCEL_URL is not set in production. Cannot determine QStash target URL.");
+        } else { // Vercel environment but VERCEL_URL is missing (shouldn't happen)
+            throw new Error("VERCEL_URL environment variable is missing in Vercel environment.");
         }
-        // --- End Dynamic URL Construction ---
-        console.log(`[QStash Upload Job ${jobId}] Publishing job to QStash target: ${imageWorkerTargetUrl}`);
+        // -----------------------------------------
+
+        console.log(`[QStash Upload Job ${jobId}] Publishing job to QStash target: ${targetWorkerUrl}`);
         const publishResponse = await qstashClient.publishJSON({
-            url: imageWorkerTargetUrl, // Use dynamically constructed URL
+            url: targetWorkerUrl, // Use dynamically constructed URL
             body: { jobId: jobId },
         });
 

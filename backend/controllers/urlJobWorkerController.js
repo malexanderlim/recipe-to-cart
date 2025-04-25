@@ -1,48 +1,69 @@
 const { Receiver } = require("@upstash/qstash");
-const { redis } = require("../services/redisService");
-const { JSDOM } = require("jsdom");
-const { Readability } = require("@mozilla/readability");
-const cheerio = require("cheerio");
-const axios = require("axios"); // Using axios as per original skeleton
+const kv = require("../services/kvService"); // Use KV service
+
+// --- Dependencies copied from urlJobController --- 
+// Dynamic import for node-fetch (needed for HTML fetching)
+const fetch = (...args) => import('node-fetch').then(({ default: fetchFn }) => fetchFn(...args)); 
+const { JSDOM } = require('jsdom');
+const { Readability } = require('@mozilla/readability');
+const cheerio = require('cheerio');
 const { callAnthropic } = require('../services/anthropicService');
 const { parseAndCorrectJson } = require('../utils/jsonUtils');
+// -------------------------------------------------
 
-// --- Initialize QStash Receiver ---
+// Initialize QStash Receiver
 const qstashReceiver = new Receiver({
     currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
     nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
 });
 
-// --- Helper Functions (Adapted from old controller) ---
-
-// Helper to update Redis status
-async function updateUrlJobStatus(jobId, status, data = {}) {
+// --- Helper function to update job status in KV --- (Adapted from urlJobController's Redis helper)
+async function updateUrlJobStatusInKV(jobId, status, data = {}) {
+    if (!kv) {
+        console.error(`[${jobId}] KV client not available in updateUrlJobStatusInKV. Cannot update status to ${status}.`);
+        return; // Or throw an error if critical
+    }
     try {
-        const currentData = await redis.get(jobId) || {};
-        const updatedData = { ...currentData, status, ...data, lastUpdatedAt: Date.now() };
-        if (status === 'failed' || status === 'completed') {
-            updatedData.finishedAt = Date.now();
-            if (updatedData.startTime) {
-                console.log(`[Worker - URL Job ${jobId}] Job finished with status ${status} in ${updatedData.finishedAt - updatedData.startTime}ms`);
+        let currentData = await kv.get(jobId);
+        if (!currentData) {
+            console.warn(`[${jobId}] Job data not found in KV when trying to update status to ${status}. Initializing.`);
+            currentData = { jobId: jobId, startTime: Date.now(), status: 'unknown' }; 
+        }
+
+        // Ensure data is an object before spreading
+        const dataToMerge = (typeof data === 'object' && data !== null) ? data : {};
+        const newData = { ...currentData, status, ...dataToMerge };
+
+        if (status === 'completed' || status === 'failed') {
+            newData.endTime = Date.now();
+            if (newData.startTime) {
+                console.log(`[${jobId}] Job finished with status ${status} in ${newData.endTime - newData.startTime}ms`);
             } else {
-                console.log(`[Worker - URL Job ${jobId}] Job finished with status ${status}.`);
+                console.log(`[${jobId}] Job finished with status ${status}.`);
             }
         } else {
-             console.log(`[Worker - URL Job ${jobId}] Status updated to ${status}.`);
+            console.log(`[${jobId}] Status updated to ${status}.`);
         }
-        await redis.set(jobId, JSON.stringify(updatedData), { ex: 86400 });
-    } catch (redisError) {
-        console.error(`[Worker - URL Job ${jobId}] Failed to update Redis status to '${status}':`, redisError);
+
+        // Use kv.set - assuming it handles stringification if needed, or pass object directly
+        // Adjust if kvService expects specific format
+        await kv.set(jobId, newData); 
+
+    } catch (error) {
+        console.error(`[${jobId}] Failed to update job status to ${status} in KV:`, error);
     }
 }
+// --- End KV Update Helper ---
 
-// Helper to parse yield string
+// --- Helper: parseYieldString (Copied EXACTLY from urlJobController) ---
 function parseYieldString(yieldStr) {
     if (!yieldStr || typeof yieldStr !== 'string') return null;
     const match = yieldStr.match(/^[^\d]*?(\d+(?:[.,]\d+)?)\s*([\w\s-]+)/);
     if (match && match[1]) {
       const quantity = parseFloat(match[1].replace(',', '.')) || null;
-      const unitRaw = match[2] ? match[2].trim().replace(/^[()[\]]+|[()[\]]+$/g, '').trim().toLowerCase() : null;
+      const unitRaw = match[2]
+        ? match[2].trim().replace(/^[()[\]]+|[()[\]]+$/g, '').trim().toLowerCase()
+        : null;
       if (quantity) {
         const unitSingular = unitRaw && unitRaw.endsWith('s') && !['servings'].includes(unitRaw) ? unitRaw.slice(0, -1) : unitRaw;
         return { quantity, unit: quantity === 1 ? unitSingular : unitRaw || null };
@@ -54,286 +75,213 @@ function parseYieldString(yieldStr) {
     }
     return null;
   }
+// --- End parseYieldString ---
 
-// Helper to find Recipe object in JSON-LD
-function findRecipeJsonLd(data) {
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        const found = findRecipeJsonLd(item);
-        if (found) return found;
-      }
-    } else if (data && typeof data === 'object') {
-      if (data['@type'] === 'Recipe' || (Array.isArray(data['@type']) && data['@type'].includes('Recipe'))) return data;
-      if (data['@graph']) return findRecipeJsonLd(data['@graph']);
-    }
-    return null;
-}
-
-// --- NEW HELPER: Robust LLM JSON Parsing (from text worker) ---
-function parseLlmJsonRobust(jobId, rawJsonResponse) {
-    if (!rawJsonResponse || typeof rawJsonResponse !== 'string') {
-        console.warn(`[${jobId}] LLM response was empty or not a string.`);
-        return null;
-    }
+// Middleware for QStash verification
+const verifyQstashSignature = async (req, res, next) => {
     try {
-        const jsonMatch = rawJsonResponse.match(/```json\s*([\s\S]*?)\s*```/);
-        let jsonString = rawJsonResponse.trim();
-        if (jsonMatch && jsonMatch[1]) {
-            jsonString = jsonMatch[1].trim();
-            console.log(`[${jobId}] Extracted JSON from markdown code block.`);
-        } else if (rawJsonResponse.startsWith('{') && rawJsonResponse.endsWith('}')) {
-            console.log(`[${jobId}] LLM response appears to be direct JSON object.`);
-        } else if (rawJsonResponse.startsWith('[') && rawJsonResponse.endsWith(']')) {
-            console.log(`[${jobId}] LLM response appears to be direct JSON array.`);
-        } else {
-            const jsonStartIndex = rawJsonResponse.indexOf('{');
-            const jsonEndIndex = rawJsonResponse.lastIndexOf('}');
-            const arrayStartIndex = rawJsonResponse.indexOf('[');
-            const arrayEndIndex = rawJsonResponse.lastIndexOf(']');
-            
-            if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
-                jsonString = rawJsonResponse.substring(jsonStartIndex, jsonEndIndex + 1);
-                console.log(`[${jobId}] Extracted potential JSON object substring.`);
-            } else if (arrayStartIndex !== -1 && arrayEndIndex !== -1 && arrayEndIndex > arrayStartIndex) {
-                 jsonString = rawJsonResponse.substring(arrayStartIndex, arrayEndIndex + 1);
-                 console.log(`[${jobId}] Extracted potential JSON array substring.`);
-            } else {
-                // If no clear JSON structure is found, attempt to parse the whole string
-                // Might fail, but worth a try before giving up
-                console.warn(`[${jobId}] Could not reliably extract JSON structure, attempting to parse whole response.`);
-            }
-        }
-        
-        const parsedData = JSON.parse(jsonString);
-        console.log(`[${jobId}] Successfully parsed robustly extracted JSON.`);
-        return parsedData;
+        const isValid = await qstashReceiver.verify({ 
+            signature: req.headers["upstash-signature"],
+            body: req.rawBody || JSON.stringify(req.body) // Fallback for safety
+        });
 
-    } catch (parseError) {
-        console.error(`[${jobId}] Error parsing LLM JSON response robustly:`, parseError);
-        console.error(`[${jobId}] Raw Response causing robust parse error:\n---\n${rawJsonResponse}\n---`);
-        // Return null if parsing fails, let the calling function handle it
-        return null; 
-    }
-}
-// --- END NEW HELPER ---
-
-// --- Main Worker Logic ---
-const processUrlJobWorker = async (req, res) => {
-    // --- QStash Verification ---
-    let jobId;
-    try {
-        const signature = req.headers["upstash-signature"];
-        const rawBody = req.body;
-        const isValid = await qstashReceiver.verify({ signature, body: JSON.stringify(rawBody) });
         if (!isValid) {
             console.error("[Worker - URL] QStash signature verification failed");
             return res.status(401).send("Unauthorized");
         }
-        jobId = rawBody.jobId;
-        if (!jobId) {
-            console.error("[Worker - URL] Missing jobId in request body");
-            return res.status(400).send("Missing jobId");
-        }
-        console.log(`[Worker - URL Job ${jobId}] Processing...`);
-    } catch (verifyError) {
-        console.error("[Worker - URL] Error during QStash verification:", verifyError);
-        return res.status(500).send("Verification Error");
+        console.log("[Worker - URL] QStash signature verified.");
+        next(); // Proceed to the main handler
+    } catch (error) {
+        console.error("[Worker - URL] Error during QStash signature verification:", error);
+        res.status(500).send("Internal Server Error during verification");
     }
-    // --- End Verification ---
+};
+
+// --- Main Worker Handler --- 
+const processUrlJobWorkerHandler = async (req, res) => {
+    console.log("[Worker - URL Handler] Received verified request");
+
+    // 1. Extract Job ID (Signature already verified by middleware)
+    const { jobId } = req.body;
+    if (!jobId) {
+        console.error("[Worker - URL Handler] Missing jobId in request body");
+        // Acknowledge QStash message but log error
+        return res.status(200).send("Missing jobId"); 
+    }
+    console.log(`[Worker - URL Handler Job ${jobId}] Processing job ID: ${jobId}`);
 
     let jobData;
-    try {
-        // --- 1. Retrieve Job Data from Redis ---
-        jobData = await redis.get(jobId);
-        if (!jobData || !jobData.inputUrl || jobData.status !== 'pending') {
-            console.warn(`[Worker - URL Job ${jobId}] Job not found, invalid, or not pending (${jobData?.status}). Skipping.`);
-            return res.status(200).send("Job not found, invalid, or already processed.");
-        }
-        const { inputUrl } = jobData;
-        await updateUrlJobStatus(jobId, 'processing_started');
-        console.log(`[Worker - URL Job ${jobId}] Processing URL: ${inputUrl}`);
 
-        // --- 2. Fetch HTML ---
+    try {
+        // --- Logic Copied & Adapted from urlJobController --- 
+        
+        /* 1) Load job record from KV */
+        if (!kv) { throw new Error('KV client not available in processUrlJobWorkerHandler'); }
+        jobData = await kv.get(jobId);
+
+        if (!jobData || ['completed', 'failed'].includes(jobData.status)) {
+            console.warn(`[Worker - URL Handler Job ${jobId}] Job not found in KV or already processed (${jobData?.status}).`);
+            return res.status(200).json({ message: 'Job already processed or not found.' });
+        }
+
+        const { inputUrl } = jobData;
+        if (!inputUrl) {
+            throw new Error('Job data from KV is missing inputUrl.');
+        }
+        await updateUrlJobStatusInKV(jobId, 'processing_started'); 
+        console.log(`[Worker - URL Handler Job ${jobId}] Processing URL: ${inputUrl}`);
+
+        /* 2) Fetch HTML */
         let htmlContent = '';
         let finalUrl = inputUrl;
-        await updateUrlJobStatus(jobId, 'fetching_html');
         try {
-            const response = await axios.get(inputUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0 Recipe-to-Cart Bot' }, // Simplified User-Agent
-                maxRedirects: 5,
-                timeout: 15000, // 15 seconds
+            await updateUrlJobStatusInKV(jobId, 'fetching_html'); 
+            console.log(`[Worker - URL Handler Job ${jobId}] Fetching HTML…`);
+            const response = await fetch(inputUrl, { /* headers, redirect, timeout */ 
+                 headers: { /* Copied exactly from old controller */
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    Connection: 'keep-alive',
+                    DNT: '1',
+                    'Upgrade-Insecure-Requests': '1'
+                },
+                redirect: 'follow',
+                timeout: 15000
             });
-            finalUrl = response.request.res.responseUrl || finalUrl; // Get final URL after redirects
-            htmlContent = response.data;
-            console.log(`[Worker - URL Job ${jobId}] Fetch successful. Final URL: ${finalUrl}. Size: ${htmlContent.length} bytes.`);
-            // Basic login wall check
-             const lower = htmlContent.toLowerCase();
-             const lURL = finalUrl.toLowerCase();
-             if ( lower.includes('log in') || lower.includes('sign in') || lURL.includes('/login') || lURL.includes('/signin') ) {
-               throw new Error('Potential login-wall detected.');
-             }
-        } catch (fetchError) {
-            console.error(`[Worker - URL Job ${jobId}] Fetch failed:`, fetchError.message);
-            await updateUrlJobStatus(jobId, 'failed', { error: `Failed to fetch or access URL: ${fetchError.message}` });
-            return res.status(200).send("Fetch failed, job status updated."); // Acknowledge QStash
+            finalUrl = response.url;
+            console.log(`[Worker - URL Handler Job ${jobId}] Fetch status ${response.status} – finalURL: ${finalUrl}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+            const cType = response.headers.get('content-type') || '';
+            if (!cType.toLowerCase().includes('text/html')) throw new Error(`Expected HTML but got “${cType}”`);
+            htmlContent = await response.text();
+            console.log(`[Worker - URL Handler Job ${jobId}] HTML fetched (${htmlContent.length} bytes)`);
+            // rudimentary login-wall detector (Copied exactly)
+            const lower = htmlContent.toLowerCase(); const lURL = finalUrl.toLowerCase();
+            if (lower.includes('log in') || lower.includes('sign in') || lURL.includes('/login') || lURL.includes('/signin')) {
+                throw new Error('Potential login-wall detected; authentication required.');
+            }
+        } catch (fetchErr) {
+            console.error(`[Worker - URL Handler Job ${jobId}] Fetching HTML failed:`, fetchErr);
+            await updateUrlJobStatusInKV(jobId, 'failed', { error: `Failed to fetch URL: ${fetchErr.message}` });
+            return res.status(200).json({ message: 'Fetch failed, job status updated.' }); // Respond OK to QStash
         }
 
-        // --- 3. Attempt JSON-LD Extraction ---
+        /* 3) Attempt JSON-LD extraction */
         let recipeResult = null;
-        await updateUrlJobStatus(jobId, 'parsing_jsonld');
         try {
+            await updateUrlJobStatusInKV(jobId, 'parsing_jsonld'); 
             const $ = cheerio.load(htmlContent);
             let recipeJson = null;
-            $('script[type="application/ld+json"]').each((_, el) => {
+            // findRecipe helper (Copied exactly)
+            const findRecipe = (data) => { /* ... exact same logic ... */ 
+                if (Array.isArray(data)) { for (const item of data) { const found = findRecipe(item); if (found) return found; } }
+                else if (data && typeof data === 'object') {
+                    if (data['@type'] === 'Recipe' || (Array.isArray(data['@type']) && data['@type'].includes('Recipe'))) return data;
+                    if (data['@graph']) return findRecipe(data['@graph']);
+                } return null;
+            };
+            $('script[type="application/ld+json"]').each((_, el) => { /* ... exact same logic ... */ 
                 if (recipeJson) return;
-                try {
-                    const parsed = JSON.parse($(el).html() || '{}');
-                    recipeJson = findRecipeJsonLd(parsed);
-                } catch { /* Ignore parsing errors */ }
+                try { const parsed = JSON.parse($(el).html() || '{}'); const found = findRecipe(parsed); if (found) recipeJson = found; } catch { /* Ignore */ }
             });
 
-            if (recipeJson?.recipeIngredient?.length) {
-                const ingredientStrings = recipeJson.recipeIngredient.map(String).filter(Boolean);
-                if (ingredientStrings.length > 0) {
+            if (recipeJson?.recipeIngredient?.length) { // Simplified check
+                const ingredientStrings = recipeJson.recipeIngredient.map((line) => String(line).trim()).filter(Boolean);
+                if (!ingredientStrings.length) {
+                    console.warn(`[Worker - URL Handler Job ${jobId}] JSON-LD found, but recipeIngredient array was empty.`);
+                } else {
                     const title = recipeJson.name || 'Recipe from URL';
-                    let parsedYield = null;
-                    if (recipeJson.recipeYield) {
+                    let parsedYield = null; // Parse yield (Copied exactly)
+                    if (recipeJson.recipeYield) { /* ... exact same yield parsing logic ... */ 
                         const rawYield = recipeJson.recipeYield;
                         if (typeof rawYield === 'string') parsedYield = parseYieldString(rawYield);
-                        else if (Array.isArray(rawYield) && rawYield.length) parsedYield = parseYieldString(String(rawYield[0]));
+                        else if (Array.isArray(rawYield) && rawYield.length) { const best = rawYield.find((el) => typeof el === 'string' && /\d/.test(el) && /[a-zA-Z]/.test(el)) || rawYield[0]; if (best) parsedYield = parseYieldString(String(best)); }
+                        else if (typeof rawYield === 'object' && rawYield !== null) { const q = rawYield.value ?? rawYield.yieldValue ?? rawYield.valueReference?.value ?? null; const u = rawYield.unitText ?? rawYield.unitCode ?? rawYield.valueReference?.unitText ?? null; if (q != null) { const qtyNum = parseFloat(String(q).replace(',', '.')) || null; if (qtyNum) parsedYield = { quantity: qtyNum, unit: u || null }; } else if (rawYield.description) { parsedYield = parseYieldString(String(rawYield.description)); } }
                     }
-
-                    // --- LLM call for JSON-LD ingredients --- 
-                    console.log(`[Worker - URL Job ${jobId}] Found ${ingredientStrings.length} ingredients via JSON-LD. Parsing with LLM...`);
-                    await updateUrlJobStatus(jobId, 'llm_parsing_jsonld_ingredients'); 
-                    const sysPrompt = 'You are an expert ingredient parser... Respond ONLY with JSON array.'; // Use appropriate prompt
+                    // LLM call for ingredients (Copied exactly)
+                    await updateUrlJobStatusInKV(jobId, 'llm_parsing_ingredients'); 
+                    const sysPrompt = 'You are an expert ingredient parser... Respond ONLY with that JSON.'; // Exact prompt
                     const userPrompt = 'Ingredient List:\n' + ingredientStrings.map((s) => `- ${s}`).join('\n');
-                    
-                    const llmResp = await callAnthropic(sysPrompt, userPrompt); 
-                    // --- Use ROBUST parsing helper --- 
-                    const parsedIngredients = parseLlmJsonRobust(jobId, llmResp); 
-                    // --- End ROBUST parsing --- 
-
-                    if (parsedIngredients && Array.isArray(parsedIngredients) && parsedIngredients.length) {
-                        const cleanIngredients = parsedIngredients
-                            .filter(o => o && typeof o === 'object' && (o.name || o.ingredient)) 
-                            .map(o => ({ 
-                                quantity: o.quantity ?? null, 
-                                unit: o.unit ?? null, 
-                                ingredient: o.ingredient || o.name 
-                             }));
-
-                        if (cleanIngredients.length) {
-                            recipeResult = { 
-                                title, 
-                                yield: parsedYield, 
-                                ingredients: cleanIngredients, 
-                                sourceUrl: finalUrl, 
-                                extractedVia: 'json-ld+llm' // Indicate LLM was used
-                            };
-                            console.log(`[Worker - URL Job ${jobId}] Parsed ${cleanIngredients.length} ingredients from JSON-LD via LLM.`);
-                        } else {
-                            console.warn(`[Worker - URL Job ${jobId}] LLM parsing of JSON-LD ingredients yielded no valid items.`);
+                    const llmResp = await callAnthropic(sysPrompt, userPrompt);
+                    const parsed = await parseAndCorrectJson(jobId, llmResp, 'array');
+                    if (parsed?.length) {
+                        const clean = parsed.filter((o) => o && typeof o === 'object' && (o.name || o.ingredient)).map((o) => ({ quantity: o.quantity ?? null, unit: o.unit ?? null, ingredient: o.ingredient || o.name }));
+                        if (clean.length) {
+                            recipeResult = { title, yield: parsedYield, ingredients: clean, sourceUrl: finalUrl, extractedFrom: 'json-ld' };
+                            console.log(`[Worker - URL Handler Job ${jobId}] Parsed ${clean.length} ingredients via JSON-LD + LLM`);
                         }
-                    } else {
-                        console.warn(`[Worker - URL Job ${jobId}] LLM parsing of JSON-LD ingredients yielded null or empty array.`);
                     }
-                     // --- End LLM Call --- 
-                } else {
-                     console.log(`[Worker - URL Job ${jobId}] JSON-LD found, but recipeIngredient was empty.`);
                 }
-            } else {
-                console.log(`[Worker - URL Job ${jobId}] No usable JSON-LD recipe found.`);
             }
-        } catch (jsonLdError) {
-            console.warn(`[Worker - URL Job ${jobId}] Error during JSON-LD processing:`, jsonLdError.message);
-            // Proceed to fallback
+        } catch (jsonLdErr) {
+            console.error(`[Worker - URL Handler Job ${jobId}] JSON-LD phase error:`, jsonLdErr); // Log but continue to fallback
         }
 
-        // --- 4. Fallback: Readability + LLM Extraction ---
+        /* 4) Fallback: Readability + LLM */
         if (!recipeResult) {
-            await updateUrlJobStatus(jobId, 'parsing_fallback_llm');
             try {
-                const dom = new JSDOM(htmlContent, { url: finalUrl });
-                const reader = new Readability(dom.window.document);
-                const article = reader.parse();
-
-                if (article && article.textContent) {
-                    console.log(`[Worker - URL Job ${jobId}] Readability extracted content. Length: ${article.textContent.length}. Calling LLM...`);
-                    
-                    const systemPrompt = `Extract the recipe title, yield object { quantity, unit }, and a JSON array of ingredients [{quantity, unit, ingredient}] from the provided text. Output ONLY a single valid JSON object with keys "title", "yield", and "ingredients". Ensure perfect JSON syntax.`;
-                    const userPrompt = article.textContent.substring(0, 18000); // Limit context size for user content
-                    
-                    const llmResponse = await callAnthropic(systemPrompt, userPrompt); 
-                    // --- Use ROBUST parsing helper --- 
-                    const parsedLlmJson = parseLlmJsonRobust(jobId, llmResponse);
-                    // --- End ROBUST parsing --- 
-
-                    if (parsedLlmJson && typeof parsedLlmJson === 'object' && !Array.isArray(parsedLlmJson) && parsedLlmJson?.ingredients?.length > 0) {
-                         const ingredients = parsedLlmJson.ingredients
-                             .filter(o => o && typeof o === 'object' && (o.name || o.ingredient) && String(o.ingredient || o.name).trim())
-                             .map(ing => ({ 
-                                 quantity: ing.quantity ?? null, 
-                                 unit: ing.unit ?? null, 
-                                 ingredient: ing.ingredient || ing.name 
-                             })); // Use cleaned ingredients logic
-
-                         if (ingredients.length > 0) { // Check if ingredients remain after filtering
-                             // --- Process yield OBJECT directly (like old controller) ---
-                             const parsedYield = parsedLlmJson.yield && typeof parsedLlmJson.yield === 'object'
-                               ? { quantity: parsedLlmJson.yield.quantity ?? null, unit: parsedLlmJson.yield.unit ?? null }
-                               : null;
-                             // --- End yield processing ---
-
-                             recipeResult = {
-                                title: parsedLlmJson.title || article.title || 'Recipe from URL',
-                                yield: parsedYield, // Assign the directly processed yield object
-                                ingredients: ingredients,
-                                sourceUrl: finalUrl,
-                                extractedVia: 'fallback-llm'
-                             };
-                             console.log(`[Worker - URL Job ${jobId}] Extracted recipe via Readability + LLM.`);
-                         } else {
-                              console.warn(`[Worker - URL Job ${jobId}] LLM fallback returned ingredients, but none were valid after filtering.`);
-                              throw new Error("Fallback extraction via LLM failed: No valid ingredients found after cleaning.")
-                         }
-                    } else {
-                        console.warn(`[Worker - URL Job ${jobId}] LLM fallback did not return usable ingredients object/array.`);
-                        throw new Error("Fallback extraction via LLM failed: Invalid structure or no ingredients.")
-                    }
-                } else {
-                    console.warn(`[Worker - URL Job ${jobId}] Readability could not extract meaningful content.`);
-                     throw new Error("Fallback extraction failed: Could not extract readable content.")
-                }
-            } catch (fallbackError) {
-                console.error(`[Worker - URL Job ${jobId}] Fallback extraction failed:`, fallbackError.message);
-                await updateUrlJobStatus(jobId, 'failed', { error: `Fallback extraction failed: ${fallbackError.message}` });
-                return res.status(200).send("Fallback extraction failed, job status updated."); // Acknowledge QStash
+                await updateUrlJobStatusInKV(jobId, 'parsing_readability'); 
+                const doc = new JSDOM(htmlContent, { url: finalUrl });
+                const article = new Readability(doc.window.document).parse();
+                if (!article?.textContent) throw new Error('Readability could not extract any text content.');
+                const fallbackTitle = article.title || 'Recipe from URL';
+                const mainText = article.textContent.substring(0, 18000); // Use substring
+                // LLM Call (Copied exactly)
+                const sysPrompt = 'You are an expert recipe parser... Output ONLY a single valid JSON object...'; // Exact prompt
+                const userPrompt = `Recipe Text:\n---\n${mainText}\n---`;
+                await updateUrlJobStatusInKV(jobId, 'llm_parsing_fallback'); 
+                const raw = await callAnthropic(sysPrompt, userPrompt);
+                const parsed = await parseAndCorrectJson(jobId, raw, 'object');
+                if (parsed?.ingredients?.length) {
+                    const clean = parsed.ingredients.filter((o) => o?.ingredient && String(o.ingredient).trim()).map((o) => ({ quantity: o.quantity ?? null, unit: o.unit ?? null, ingredient: o.ingredient }));
+                    if (clean.length) {
+                        const y = parsed.yield && typeof parsed.yield === 'object' ? { quantity: parsed.yield.quantity ?? null, unit: parsed.yield.unit ?? null } : null;
+                        recipeResult = { title: parsed.title || fallbackTitle, yield: y, ingredients: clean, sourceUrl: finalUrl, extractedFrom: 'readability' };
+                        console.log(`[Worker - URL Handler Job ${jobId}] Parsed ${clean.length} ingredients via Readability fallback`);
+                    } else { throw new Error('LLM returned no valid ingredients.'); }
+                } else { throw new Error('LLM response lacked expected structure.'); }
+            } catch (fallbackErr) {
+                console.error(`[Worker - URL Handler Job ${jobId}] Readability / fallback error:`, fallbackErr);
+                await updateUrlJobStatusInKV(jobId, 'failed', { error: `Fallback extraction failed: ${fallbackErr.message}` });
+                return res.status(200).json({ message: 'Fallback failed, job updated.' }); // Respond OK to QStash
             }
         }
 
-        // --- 5. Final Success Update ---
+        /* 5) Final KV update + response */
         if (recipeResult) {
-            console.log(`[Worker - URL Job ${jobId}] Recipe processing successful. Updating status to 'completed'.`);
-            await updateUrlJobStatus(jobId, 'completed', { result: recipeResult });
-            res.status(200).send("URL Processing completed successfully.");
+            await updateUrlJobStatusInKV(jobId, 'completed', { result: recipeResult }); 
+            console.log(`[Worker - URL Handler Job ${jobId}] Processing complete, result stored in KV.`);
         } else {
-            // Should not happen if logic is correct, but as a safeguard
-            console.error(`[Worker - URL Job ${jobId}] Processing finished but no recipeResult obtained. Failing job.`);
-            await updateUrlJobStatus(jobId, 'failed', { error: 'Processing completed without extracting recipe data.' });
-            res.status(200).send("Processing finished without result, job failed."); // Acknowledge QStash
+            await updateUrlJobStatusInKV(jobId, 'failed', { error: 'Finished without extracting a valid recipe.' });
+            console.error(`[Worker - URL Handler Job ${jobId}] Finished unexpectedly without result.`);
         }
+        
+        // --- End Copied Logic --- 
+        
+        console.log(`[Worker - URL Handler Job ${jobId}] Successfully processed job.`);
+        res.status(200).send("URL Processing complete."); // Respond OK to QStash
 
     } catch (error) {
-        console.error(`[Worker - URL Job ${jobId}] CRITICAL ERROR processing URL job:`, error);
-        if (jobId) {
-            await updateUrlJobStatus(jobId, 'failed', { error: error.message || 'URL worker failed unexpectedly.' });
+        console.error(`[Worker - URL Handler Job ${jobId}] CRITICAL worker error:`, error);
+        const currentJobId = jobId || req.body?.jobId; // Ensure we have the jobId
+        if (currentJobId && kv) {
+            try {
+                // Attempt to update KV status to failed
+                const existingData = jobData || await kv.get(currentJobId) || {}; 
+                await updateUrlJobStatusInKV(currentJobId, 'failed', { 
+                     error: `Unexpected worker error: ${error.message}` 
+                });
+            } catch (kvError) {
+                console.error(`[Worker - URL Handler Job ${currentJobId}] Failed to update KV status to 'failed' in catch block:`, kvError);
+            }
         }
-        // Return 500, QStash will retry
+        // Return 500 to indicate failure to QStash (it might retry based on config)
         res.status(500).send("Internal Server Error during URL processing");
     }
 };
 
 module.exports = {
-    processUrlJobWorker,
-};
+    verifyQstashSignature, // Export middleware
+    processUrlJobWorkerHandler, // Export main handler
+}; 

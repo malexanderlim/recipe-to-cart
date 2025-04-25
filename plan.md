@@ -82,15 +82,15 @@ These issues directly impact the core value proposition or the demo user experie
             *   Add QStash signature verification middleware (`Receiver.verify()`).
             *   Move core logic from *old* `/api/process-image` (fetch KV, download blob, call Vision).
             *   Implement robust `try...catch` to update KV status to `failed` on error.
-            *   On successful Vision call, update KV status (`vision_completed`) AND publish the *next* job to the *existing* QStash topic for the text processing worker (`/api/process-text-worker`).
+            *   On successful Vision call, update KV status (`vision_completed`) AND publish the *next* job to the *existing* QStash topic for the text processing worker (`/api/process-text-worker`) **using a dynamically constructed URL**.
         *   **[ ] Implement URL Worker Logic (`urlJobWorkerController.js`):**
             *   Add QStash signature verification middleware (`Receiver.verify()`).
             *   Move core logic from *old* `/api/process-url-job` (fetch KV, scrape URL, maybe LLM, update KV with `completed` or `failed`).
             *   Implement robust `try...catch` to update KV status to `failed` on error.
-        *   **[ ] Upstash Configuration:** Configure the new QStash topics (`image-processing-jobs`, `url-processing-jobs`) and their corresponding target URLs (`/api/process-image-worker`, `/api/process-url-job-worker`) in the Upstash console. Set appropriate retry policies. **(Switched to dynamic URL construction, config not needed in this way)**
-        *   **[ ] Testing (Image):** Verify the end-to-end image flow: Upload -> `/api/upload` -> QStash -> `/api/process-image-worker` -> QStash -> `/api/process-text-worker` -> Final Redis update -> Frontend poll success. Test error handling within the image worker.
-        *   **[ ] Testing (URL):** Verify the end-to-end URL flow: Submit URL -> `/api/process-url` -> QStash -> `/api/process-url-job-worker` -> Final Redis update -> Frontend poll success. Test error handling within the URL worker.
-        *   **[ ] Cleanup (Post-Testing):** Remove the old, now unused routes and controllers associated with `/api/process-image` and `/api/process-url-job` (`processImageController.js`, `urlJobController.js`, `processImageRoutes.js`, `urlJobRoutes.js`).
+        *   **[ ] Environment Variables:** Ensure `APP_BASE_URL` is set in the local `.env` file (e.g., `http://localhost:3001` or your tunnel URL like `https://xxxx.ngrok.io`). `VERCEL_URL` is automatically provided by Vercel in production. QStash token env vars (`QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`) are required.
+        *   **[ ] Cleanup:** Remove the old, now unused routes and controllers associated with `/api/process-image` and `/api/process-url-job`.
+        *   **[ ] Testing (Image):** Verify the end-to-end image flow: Upload -> `/api/upload` -> QStash -> `/api/process-image-worker` -> QStash -> `/api/process-text-worker` -> Final KV update -> Frontend poll success. Test error handling within the image worker.
+        *   **[ ] Testing (URL):** Verify the end-to-end URL flow: Submit URL -> `/api/process-url` -> QStash -> `/api/process-url-job-worker` -> Final KV update -> Frontend poll success. Test error handling within the URL worker.
         *   **[ ] Documentation:** Update `PROJECT_OVERVIEW.md` data flow diagram and descriptions.
 *   **[ ] Address Stuck Processing (`vision_completed` state):** (Superseded by QStash migration for the trigger failure aspect. UX improvement for handling timeouts still relevant).
     *   **Problem:** Occasionally, jobs get stuck in the `vision_completed` status and never proceed to the `/api/process-text` step (Anthropic analysis) or time out gracefully. The frontend polling eventually shows a generic timeout error, but the root cause seems to be the silent failure of the trigger between the two background functions.
