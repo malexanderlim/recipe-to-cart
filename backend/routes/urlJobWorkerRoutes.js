@@ -7,6 +7,7 @@ const {
 const router = express.Router();
 
 // Apply QStash verification middleware first, then the handler
-router.post('/process-url-job-worker', verifyQstashSignature, processUrlJobWorkerHandler);
+// The base path is already /api/process-url-job-worker from server.js
+router.post('/', verifyQstashSignature, processUrlJobWorkerHandler);
 
 module.exports = router; 

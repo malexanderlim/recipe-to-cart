@@ -6,7 +6,8 @@ const {
 
 const router = express.Router();
 
-// This route will be the target for the QStash topic 'image-processing-jobs'
-router.post('/process-image-worker', verifyQstashSignature, processImageWorkerHandler);
+// Apply QStash verification middleware first, then the handler
+// The base path is already /api/process-image-worker from server.js
+router.post('/', verifyQstashSignature, processImageWorkerHandler);
 
 module.exports = router; 
