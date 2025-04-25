@@ -587,8 +587,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         hasCheckedIngredients = true;
                         return {
-                            // FIX: Send the raw ingredient string to the backend
-                            ingredient: item.raw || 'Unknown Ingredient', // Use item.raw
+                            // REVERT: Use item.ingredient for backend payload as before
+                            ingredient: item.ingredient || 'Unknown Ingredient', // Use item.ingredient
                             quantity: finalQuantity,
                             unit: item.unit // Keep original unit (or null) for backend processing
                         };
