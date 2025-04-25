@@ -29,6 +29,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsSection = document.getElementById('results-section'); // Get the section containing results
     // --- Add element for Review List --- 
     const reviewListArea = document.getElementById('review-list-area'); // Placeholder for review section
+    // --- Get reference to the static Instacart button ---
+    const sendToInstacartButton = document.getElementById('sendToInstacartButton');
     // ---------------------------------
 
     // Remove single yield controls - they will be per-recipe
@@ -91,6 +93,14 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error("FATAL: Could not find createListButton element to attach listener!");
     }
     // Remove listeners for single yield controls
+
+    // --- Add listener for the static Instacart button --- 
+    if (sendToInstacartButton) {
+        sendToInstacartButton.addEventListener('click', handleSendToInstacart);
+    } else {
+        console.error("FATAL: Could not find sendToInstacartButton element to attach listener!");
+    }
+    // --------------------------------------------------
 
     // --- Ensure empty state is correct on load --- 
     updateEmptyStateVisibility(); // Call the helper on load
@@ -780,388 +790,369 @@ document.addEventListener('DOMContentLoaded', () => {
         reviewListArea.appendChild(list);
         console.log("[displayReviewList] UL appended.");
 
-        // Add the "Send to Instacart" button
-        const sendButton = document.createElement('button');
-        sendButton.id = 'send-to-instacart-button';
-        // Change button text
-        sendButton.textContent = 'Create Instacart Shopping List'; 
-        // Apply the same class as the final link for similar styling
-        sendButton.classList.add(
-            'instacart-link-button', 
-            'bg-blue-500', 
-            'hover:bg-blue-700', 
-            'text-white', 
-            'font-bold', 
-            'py-2', 
-            'px-4', 
-            'rounded-md', 
-            'disabled:opacity-50', 
-            'disabled:cursor-not-allowed', 
-            'transition', 
-            'duration-150', 
-            'ease-in-out',
-            'active:scale-95' // *** Add active state ***
-        );
-        sendButton.dataset.originalTitle = originalTitle; // Store title for later use
-        sendButton.addEventListener('click', handleSendToInstacart);
-        console.log("[displayReviewList] Appending Send button.");
-        reviewListArea.appendChild(sendButton);
         console.log("[displayReviewList] Function finished.");
     }
 
     // --- NEW: Function to handle sending the final list ---
     async function handleSendToInstacart(event) {
-        const sendButton = event.target;
-        const originalTitle = sendButton.dataset.originalTitle;
-        const reviewListCheckboxes = reviewListArea.querySelectorAll('.review-ingredient-list input[type="checkbox"]');
-        
-        sendButton.disabled = true; // Disable button immediately
-        setInstacartLoadingState(true); 
-        clearInstacartResults(); 
+        // No longer inside a form, so preventDefault might not be needed, but doesn't hurt.
+        // event.preventDefault(); // Assuming it might be triggered by other means eventually.
 
-        const finalIngredientsToSend = [];
-        reviewListCheckboxes.forEach(checkbox => {
-            if (checkbox.checked) {
+        // --- Show Loading State ---
+        setInstacartLoadingState(true, 'Building your shopping cart, please wait...');
+        clearInstacartResults(); // Clear previous errors/links
+
+        const finalIngredients = [];
+        const listItems = reviewListArea.querySelectorAll('li.ingredient-item'); // Target specific list items
+
+        listItems.forEach(item => {
+            // *** FIX: Find the checkbox *within* the list item ***
+            const checkbox = item.querySelector('input[type="checkbox"]');
+            // *** Ensure checkbox exists and is checked ***
+            if (checkbox && checkbox.checked) {
+                // Retrieve the full data stored on the checkbox element
                 try {
-                    // Parse the full item data stored on the checkbox
-                    const itemData = JSON.parse(checkbox.dataset.itemData); 
-                    // We need to send the structure {name, line_item_measurements}
-                    finalIngredientsToSend.push({
-                        name: itemData.name,
-                        line_item_measurements: itemData.line_item_measurements
-                    });
+                    // *** FIX: Parse data from checkbox.dataset.itemData ***
+                    const itemData = JSON.parse(checkbox.dataset.itemData);
+                    if (itemData) {
+                        // The backend expects the full structure including 'line_item_measurements'
+                        finalIngredients.push(itemData); 
+                    } else {
+                         console.warn("Could not parse ingredient data for item:", item.textContent);
+                    }
                 } catch (e) {
-                    console.error("Error parsing item data from checkbox:", e);
+                    // *** FIX: Log the correct dataset that failed parsing ***
+                    console.error("Error parsing ingredient data from list item checkbox:", checkbox.dataset.itemData, e);
                 }
             }
         });
 
-        console.log("Final ingredients selected by user (with measurements):", finalIngredientsToSend);
-        
-        if (finalIngredientsToSend.length === 0) {
-             displayInstacartError("No ingredients selected to send to Instacart.");
-             setInstacartLoadingState(false);
-             return;
+        if (finalIngredients.length === 0) {
+            displayInstacartError("No ingredients selected to add to cart.");
+            setInstacartLoadingState(false); // Re-enable button
+            return;
         }
 
+        // --- Log final payload for debugging ---
+        console.log("Sending to Instacart:", JSON.stringify({ items: finalIngredients }, null, 2));
+
         try {
-            // Call /api/send-to-instacart with the correct payload structure
             const response = await fetch(`${backendUrl}/api/send-to-instacart`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 
-                    ingredients: finalIngredientsToSend, // Contains name & line_item_measurements
-                    title: originalTitle
-                }),
+                // *** FIX: Send the array under the 'ingredients' key, not 'items' ***
+                body: JSON.stringify({ ingredients: finalIngredients }), 
             });
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.details || data.error || `Server error: ${response.statusText}`);
-            }
-
-            displayInstacartLink(data.instacartUrl);
-            // Success: Keep the create button disabled/hidden implicitly by not re-enabling
-
-        } catch (error) {
-            console.error('Error sending final list to Instacart:', error);
-            displayInstacartError(`Failed to send list to Instacart: ${error.message}`);
-            // Error: Re-enable the button so user can retry
-            sendButton.disabled = false; 
-        } finally {
-            setInstacartLoadingState(false);
-        }
-    }
-
-    // --- NEW Helper functions for Review Step loading/error/clear ---
-    function setReviewLoadingState(isLoading) {
-        // Show/hide a simple text indicator within the review area
-        if (isLoading && reviewListArea) {
-            reviewListArea.innerHTML = '<p>Generating review list...</p>'; // Simple text loading
-            reviewListArea.style.display = 'block';
-        }
-        // Optionally hide if finished loading and handled by displayReviewList/displayReviewError
-        // else if (!isLoading && reviewListArea) {
-        //     reviewListArea.style.display = 'none'; // Or keep visible if content was added
-        // }
-        
-        // Disable the "Review Final List" button while processing
-        if (createListButton) { 
-            createListButton.disabled = isLoading; 
-        }
-    }
-
-    function displayReviewError(message) {
-        console.error("Review List Error:", message);
-        if (reviewListArea) {
-            // Display error directly within the review area
-            reviewListArea.innerHTML = `<p class="error">Error generating review: ${message}</p>`;
-            reviewListArea.style.display = 'block';
-        }
-    }
-
-    function clearReviewAreaAndFinalLink() {
-        if (reviewListArea) {
-            reviewListArea.innerHTML = '';
-        }
-         clearInstacartResults(); // Clear final link/error area too
-    }
-
-    // Updates the "Review Final List" button state 
-    function updateCreateListButtonState() {
-        if (!createListButton) return; // Guard if button doesn't exist
-        const hasIngredients = processedRecipes.some(r => !r.error && r.ingredients.length > 0);
-        // Enable button if there are *any* initial ingredients parsed
-        createListButton.disabled = !hasIngredients;
-        
-        // Also potentially disable pantry checkbox if no ingredients yet
-        if (pantryCheckbox) {
-             pantryCheckbox.disabled = !hasIngredients;
-             if (!hasIngredients) {
-                 pantryCheckbox.checked = false; // Reset if disabled
-             }
-        }
-    }
-
-    // Updated error display (appends messages)
-    function displayError(message) {
-        const p = document.createElement('p');
-        p.textContent = message;
-        errorMessageDiv.appendChild(p);
-        errorMessageDiv.style.display = 'block';
-    }
-
-    // Clear all results areas (needs update for review area)
-    function clearAllResults() {
-        imagePreviewArea.innerHTML = '';
-        recipeResultsContainer.innerHTML = ''; // Clear dynamic recipe blocks
-        processedRecipes = []; // Clear stored data
-        recipeCounter = 0;
-        if (createListButton) { createListButton.disabled = true; }
-        errorMessageDiv.innerHTML = ''; 
-        errorMessageDiv.style.display = 'none';
-        clearReviewAreaAndFinalLink(); 
-        
-        // *** Hide final list section when clearing ***
-        const finalListSection = document.getElementById('final-list-section');
-        if (finalListSection) {
-            finalListSection.classList.remove('opacity-100');
-            finalListSection.classList.add('opacity-0');
-            // Optionally set display none after transition, or rely on opacity-0
-             setTimeout(() => { // Hide after transition
-                if (!finalListSection.classList.contains('opacity-100')) { // Check if it wasn't shown again quickly
-                     finalListSection.style.display = 'none';
+            if (response.ok) {
+                const data = await response.json();
+                if (data.instacartUrl) {
+                    console.log("Instacart URL received:", data.instacartUrl);
+                    // --- Redirect on Success - Open in New Tab ---
+                    window.open(data.instacartUrl, '_blank');
+                    // Since it opens in a new tab, we *should* clear the loading state
+                    // of the button on the original page.
+                    setInstacartLoadingState(false); // Hide loading, re-enable button
+                } else {
+                    // Handle cases where response is OK but URL is missing
+                    console.error('Instacart API call succeeded but no URL was returned.');
+                    displayInstacartError('Failed to get Instacart link. Please try again.');
+                    setInstacartLoadingState(false); // Hide loading, re-enable button
                 }
-            }, 300); // Match duration
+            } else {
+                // Handle non-OK responses (4xx, 5xx)
+                const errorData = await response.json().catch(() => ({})); // Try to parse error
+                const errorMessage = errorData.error || `Request failed with status ${response.status}`;
+                console.error('Error sending list to Instacart:', response.status, errorMessage);
+                displayInstacartError(`Error: ${errorMessage}. Please check items and try again.`);
+                setInstacartLoadingState(false); // Hide loading, re-enable button
+            }
+        } catch (error) {
+            // Handle network errors or other fetch issues
+            console.error('Network error sending list to Instacart:', error);
+            displayInstacartError('Network error. Please check connection and try again.');
+            setInstacartLoadingState(false); // Hide loading, re-enable button
         }
-
-        // Also remove the pantry checkbox if it exists
-        const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
-        if (existingCheckboxDiv) {
-            existingCheckboxDiv.remove();
-        }
-        updateEmptyStateVisibility(); // Call helper instead
     }
 
-    // Placeholder functions (ensure clearInstacartResults is correct)
-    function setInstacartLoadingState(isLoading) {
-        const instacartLoadingIndicator = document.getElementById('instacart-loading-indicator');
-        const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-        const instacartLinkArea = document.getElementById('instacart-link-area');
-        const sendButton = document.getElementById('send-to-instacart-button');
-
-        if (instacartLoadingIndicator) { 
-            // Use innerHTML to include spinner
-            instacartLoadingIndicator.innerHTML = isLoading ? `${spinnerSVG} Sending to Instacart...` : '';
-            instacartLoadingIndicator.style.display = isLoading ? 'block' : 'none';
-        }
+    // Refined Loading State function
+    function setInstacartLoadingState(isLoading, message = '') {
+        const sendButton = document.getElementById('sendToInstacartButton');
         
-        // Manage button state based on loading
-        if (sendButton) {
-             sendButton.disabled = isLoading; // Disable while loading
-        }
-
         if (isLoading) {
-            // Clear previous results when starting to load
-            if (instacartErrorMessageDiv) {
-                instacartErrorMessageDiv.textContent = '';
-                instacartErrorMessageDiv.style.display = 'none';
+            if (sendButton) {
+                sendButton.disabled = true;
+                // Optionally visually gray out or change style
+                sendButton.classList.add('opacity-50', 'cursor-wait'); 
             }
-            if (instacartLinkArea) {
-                 instacartLinkArea.innerHTML = ''; 
+            instacartLoadingIndicator.textContent = message;
+            instacartLoadingIndicator.style.display = 'block';
+            instacartErrorMessageDiv.style.display = 'none'; // Hide error when loading starts
+        } else {
+            if (sendButton) {
+                sendButton.disabled = false;
+                sendButton.classList.remove('opacity-50', 'cursor-wait');
             }
+            instacartLoadingIndicator.style.display = 'none';
         }
     }
+
+    // Refined Error Display function
     function displayInstacartError(message) {
-        const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-        const sendButton = document.getElementById('send-to-instacart-button');
-        if(instacartErrorMessageDiv) {
-            instacartErrorMessageDiv.textContent = message;
-            instacartErrorMessageDiv.style.display = 'block';
-        }
-        // Re-enable button on error
-        if (sendButton) {
-             sendButton.disabled = false;
-        }
+        instacartErrorMessageDiv.textContent = message;
+        instacartErrorMessageDiv.style.display = 'block';
+        instacartLoadingIndicator.style.display = 'none'; // Ensure loading is hidden
+        // We now handle enabling the button within setInstacartLoadingState(false) called by the error handler
     }
+
+    // Clear Previous Results (Error or Link)
     function clearInstacartResults() {
-        const instacartLinkArea = document.getElementById('instacart-link-area');
-        const instacartErrorMessageDiv = document.getElementById('instacart-error-message');
-        const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
-        
-        if(instacartLinkArea) instacartLinkArea.innerHTML = '';
-        if(instacartErrorMessageDiv) {
-            instacartErrorMessageDiv.textContent = '';
-            instacartErrorMessageDiv.style.display = 'none';
-        }
-        // Also ensure the button is visible/enabled when clearing results (e.g., before a new attempt)
-        if (sendButton) {
-            sendButton.style.display = 'inline-block'; // Ensure it's visible if it was hidden
-            sendButton.disabled = false; 
-        }
+        instacartErrorMessageDiv.textContent = '';
+        instacartErrorMessageDiv.style.display = 'none';
+        instacartLoadingIndicator.textContent = '';
+        instacartLoadingIndicator.style.display = 'none';
+        // Do NOT remove the button itself here, just clear feedback areas.
+        // const linkArea = document.getElementById('instacart-link-area');
+        // if(linkArea) linkArea.innerHTML = ''; // Keep the button!
     }
+
+    // --- DEPRECATED: No longer displaying the link, redirecting instead ---
+    /*
     function displayInstacartLink(url) {
-        const instacartLinkArea = document.getElementById('instacart-link-area');
-        const sendButton = document.getElementById('send-to-instacart-button'); // Get button reference
+        instacartLinkArea.innerHTML = ''; // Clear previous links/buttons
+        const linkButton = document.createElement('a');
+        linkButton.href = url;
+        linkButton.target = '_blank'; // Open in new tab
+        linkButton.rel = 'noopener noreferrer';
+        linkButton.textContent = 'Open Instacart Shopping List';
+        // Apply button-like styling with Tailwind
+        linkButton.className = 'inline-block bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 px-6 rounded-md transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500';
 
-        if (!instacartLinkArea) return;
-        
-        instacartLinkArea.innerHTML = ''; // Clear previous links/messages
-
-        // Hide the "Create" button on success
-        if (sendButton) {
-            sendButton.style.display = 'none';
-        }
-
-        // Add success message
-        const successMsg = document.createElement('p');
-        successMsg.textContent = 'Success! Your list is ready on Instacart:';
-        successMsg.style.marginBottom = '10px'; // Add some space
-        instacartLinkArea.appendChild(successMsg);
-
-        const link = document.createElement('a');
-        link.href = url;
-        link.textContent = 'Open Instacart Shopping List';
-        link.target = '_blank'; // Open in new tab
-        // *** Apply Tailwind button styles (like the orange Create button) ***
-        link.classList.add(
-            'inline-block', // Make it behave like a button for padding/margin
-            'bg-orange-500', 
-            'hover:bg-orange-600', 
-            'text-white', 
-            'font-bold', 
-            'py-2', 
-            'px-6', 
-            'rounded-md', 
-            'transition', 
-            'duration-150', 
-            'ease-in-out',
-            'active:scale-95',
-            'focus:outline-none', 
-            'focus:ring-2', 
-            'focus:ring-offset-2', 
-            'focus:ring-orange-500' 
-        );
-        // link.classList.add('instacart-link-button'); // Remove old class
-        
-        instacartLinkArea.appendChild(link);
+        instacartLinkArea.appendChild(linkButton);
+        instacartLoadingIndicator.style.display = 'none'; // Hide loading
+        instacartErrorMessageDiv.style.display = 'none'; // Hide error
     }
+    */
+   // --- END DEPRECATED ---
 
-    // --- Function to create and add the pantry checkbox --- 
+    // --- Function to create and add the pantry checkbox ---
     function createPantryCheckbox() {
-        // Check if it already exists, remove if so (e.g., on re-upload)
+        // Check if it already exists, remove if so (e.g., on re-upload or multiple completions)
         const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
         if (existingCheckboxDiv) {
+            console.log("Removing existing pantry checkbox before creating new one.");
             existingCheckboxDiv.remove();
         }
 
+        // Only create if there are processed recipes with ingredients
+        const hasIngredients = processedRecipes.some(r => !r.error && r.ingredients && r.ingredients.length > 0);
+        if (!hasIngredients) {
+            console.log("Skipping pantry checkbox creation - no processed ingredients found.");
+            return;
+        }
+
+        console.log("Creating pantry checkbox...");
         const containerDiv = document.createElement('div');
         containerDiv.id = 'pantry-checkbox-container';
-        containerDiv.classList.add('flex', 'items-center', 'mb-4');
-        
-        pantryCheckbox = document.createElement('input');
+        // Style the container: Flex layout, center items, add bottom margin
+        containerDiv.classList.add('flex', 'items-center', 'mb-4', 'px-1'); // Added padding for alignment
+
+        // Create the checkbox input element
+        pantryCheckbox = document.createElement('input'); // Assign to the globally scoped variable
         pantryCheckbox.type = 'checkbox';
         pantryCheckbox.id = 'pantry-items-checkbox';
+        // Apply Tailwind classes for styling the checkbox
         pantryCheckbox.classList.add(
             'h-4', 
-            'w-4', 
-            'text-orange-600',
+            'w-4',
+            // Use a distinct color, maybe matching the 'Review' button or a neutral one
+            'text-green-600', // Example: Green to match Review button
             'border-gray-300', 
-            'rounded', 
-            'focus:ring-orange-500',
-            'mr-2',
-            'shrink-0'
+            'rounded',
+            'focus:ring-green-500', // Focus ring matching the color
+            'mr-2', // Margin to the right
+            'shrink-0' // Prevent checkbox from shrinking if label text is long
         );
-        
+
+        // Create the label for the checkbox
         const label = document.createElement('label');
         label.htmlFor = 'pantry-items-checkbox';
-        label.textContent = ' I have commonly found pantry items';
+        label.textContent = ' I have common pantry items'; // Leading space for visual separation
+        // Apply Tailwind classes for styling the label
         label.classList.add('text-sm', 'font-medium', 'text-gray-700', 'cursor-pointer', 'select-none');
 
-        // Add helper text span
+        // Create the helper text span
         const helperSpan = document.createElement('span');
         helperSpan.classList.add('text-xs', 'text-gray-500', 'ml-1');
-        helperSpan.textContent = ' (salt, pepper, oil, sugar, etc. - quickly unchecks these)';
+        helperSpan.textContent = '(salt, pepper, oil, sugar, etc.)'; // Shortened helper text
 
+        // Append elements to the container
         containerDiv.appendChild(pantryCheckbox);
         containerDiv.appendChild(label);
         containerDiv.appendChild(helperSpan);
 
-        // Insert before the recipe results container
-        resultsSection.insertBefore(containerDiv, recipeResultsContainer); 
+        // Insert the container into the DOM, specifically before the recipe results container
+        // Ensure resultsSection and recipeResultsContainer are defined in this scope
+        if (resultsSection && recipeResultsContainer) {
+             resultsSection.insertBefore(containerDiv, recipeResultsContainer);
+             console.log("Pantry checkbox inserted into DOM.");
+        } else {
+             console.error("Could not find resultsSection or recipeResultsContainer to insert pantry checkbox.");
+             return; // Stop if containers aren't found
+        }
 
-        // Add event listener
+        // Add the event listener to the newly created checkbox
         pantryCheckbox.addEventListener('change', handlePantryCheckboxChange);
+        console.log("Event listener added to pantry checkbox.");
+
+        // Check initial state based on common items currently displayed
+        updatePantryCheckboxInitialState();
     }
 
     // --- Handler for the master pantry checkbox --- 
     function handlePantryCheckboxChange(event) {
+        if (!pantryCheckbox) return; // Guard against null checkbox
+
         const isChecked = event.target.checked;
-        const shouldBeChecked = !isChecked; // If master is checked, items should be unchecked (false), and vice versa
-        
+        // If master checkbox is checked, corresponding ingredient checkboxes should be unchecked (checked = false)
+        // If master checkbox is unchecked, corresponding ingredient checkboxes should be checked (checked = true)
+        const shouldIngredientBeChecked = !isChecked;
+        console.log(`Pantry checkbox toggled. Master checked: ${isChecked}. Ingredients should be checked: ${shouldIngredientBeChecked}`);
+
+        // Iterate through all *currently displayed* recipe cards
         processedRecipes.forEach(recipeInfo => {
-            if (!recipeInfo || !recipeInfo.ingredients) return; // Skip if no recipe or ingredients
+            if (!recipeInfo || !recipeInfo.ingredients) return;
 
-            recipeInfo.ingredients.forEach((item, index) => {
-                if (!item || typeof item.ingredient === 'undefined') return; // Skip invalid items
+            const recipeCard = document.getElementById(recipeInfo.id);
+            if (!recipeCard) return; // Skip if card not found in DOM
 
-                const ingredientNameLower = item.ingredient.toLowerCase();
-                const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
-                
-                if (isCommon) {
-                    // Update the data model (optional, but good practice)
-                    item.checked = shouldBeChecked;
-                    
-                    // Update the DOM checkbox
-                    const uniqueId = `ingredient-${recipeInfo.id}-${index}`;
-                    const checkboxElement = document.getElementById(uniqueId);
-                    if (checkboxElement) {
-                        checkboxElement.checked = shouldBeChecked;
+            // Find all ingredient checkboxes within this specific recipe card
+            const ingredientCheckboxes = recipeCard.querySelectorAll('.ingredient-checkbox');
+            
+            ingredientCheckboxes.forEach(checkboxElement => {
+                const index = parseInt(checkboxElement.dataset.ingredientIndex, 10);
+                // Get the corresponding ingredient data using the index
+                const itemData = recipeInfo.ingredients[index]; 
+
+                if (itemData && itemData.ingredient) { // Ensure item data and ingredient name exist
+                    const ingredientNameLower = itemData.ingredient.toLowerCase();
+                    // Check if the ingredient name includes any of the common keywords
+                    const isCommon = commonItemsKeywords.some(keyword => ingredientNameLower.includes(keyword));
+
+                    if (isCommon) {
+                        // Update the DOM checkbox state
+                        checkboxElement.checked = shouldIngredientBeChecked;
+                        
+                        // Update the label styling (line-through, text color)
+                        const labelElement = recipeCard.querySelector(`label[for='${checkboxElement.id}']`);
+                        if (labelElement) {
+                            if (shouldIngredientBeChecked) {
+                                // Re-check the item: remove line-through and gray color
+                                labelElement.classList.remove('line-through', 'text-gray-400');
+                            } else {
+                                // Uncheck the item: add line-through and gray color
+                                labelElement.classList.add('line-through', 'text-gray-400');
+                            }
+                        }
+                        
+                        // Update the underlying data model (important!)
+                        // This ensures the state persists if the card is re-rendered (though it shouldn't be)
+                        itemData.checked = shouldIngredientBeChecked;
                     }
+                }
+            });
+        });
+        
+        // Update the main button state if needed (e.g., if unchecking all makes list empty)
+        updateCreateListButtonState(); 
+    }
 
-                    // *** Add/Remove Label Styling ***
-                    const labelElement = document.querySelector(`label[for='${uniqueId}']`);
-                    if (labelElement) {
-                        if (shouldBeChecked) {
-                            // Item should be checked (pantry box unchecked)
-                            labelElement.classList.remove('line-through', 'text-gray-400');
-                        } else {
-                            // Item should be unchecked (pantry box checked)
-                            labelElement.classList.add('line-through', 'text-gray-400');
+    // --- Helper to set the initial state of the pantry checkbox --- 
+    function updatePantryCheckboxInitialState() {
+        if (!pantryCheckbox) return; // Only run if checkbox exists
+
+        let allCommonAreUnchecked = true;
+        let foundAnyCommon = false;
+
+        processedRecipes.forEach(recipeInfo => {
+            if (!recipeInfo || !recipeInfo.ingredients) return;
+            const recipeCard = document.getElementById(recipeInfo.id);
+            if (!recipeCard) return;
+
+            const ingredientCheckboxes = recipeCard.querySelectorAll('.ingredient-checkbox');
+            ingredientCheckboxes.forEach(checkboxElement => {
+                const index = parseInt(checkboxElement.dataset.ingredientIndex, 10);
+                const itemData = recipeInfo.ingredients[index];
+                if (itemData && itemData.ingredient) {
+                    const isCommon = commonItemsKeywords.some(keyword => 
+                        itemData.ingredient.toLowerCase().includes(keyword)
+                    );
+                    if (isCommon) {
+                        foundAnyCommon = true;
+                        if (checkboxElement.checked) { // If any common item IS checked...
+                            allCommonAreUnchecked = false; // ...then the pantry box should be unchecked
                         }
                     }
-                    // *** End Label Styling ***
                 }
             });
         });
 
-        if (isChecked) {
-            console.log("Pantry checkbox checked - Unchecked common items.");
+        // If we found common items AND they were all unchecked, the pantry box should be checked.
+        // Otherwise (no common items found, or at least one common item was checked), it should be unchecked.
+        pantryCheckbox.checked = foundAnyCommon && allCommonAreUnchecked;
+        console.log(`Pantry checkbox initial state set to checked: ${pantryCheckbox.checked} (Found common: ${foundAnyCommon}, All common unchecked: ${allCommonAreUnchecked})`);
+    }
+
+    // --- Function to Update the State of the "Review Final List" Button ---
+    function updateCreateListButtonState() {
+        if (!createListButton) {
+            console.warn("updateCreateListButtonState: createListButton not found.");
+            return; // Guard if button doesn't exist
+        }
+        // Check if there is at least one recipe in processedRecipes that has finished
+        // processing (no error) and has at least one ingredient.
+        const hasSuccessfullyProcessedIngredients = processedRecipes.some(recipe => 
+            !recipe.error && recipe.ingredients && recipe.ingredients.length > 0
+        );
+
+        console.log(`Updating createListButton state. Has ingredients: ${hasSuccessfullyProcessedIngredients}`);
+        createListButton.disabled = !hasSuccessfullyProcessedIngredients;
+
+        // Also potentially disable pantry checkbox if no ingredients yet
+        // Re-check existence of pantryCheckbox as it might be created later
+        const currentPantryCheckbox = document.getElementById('pantry-items-checkbox'); 
+        if (currentPantryCheckbox) {
+             currentPantryCheckbox.disabled = !hasSuccessfullyProcessedIngredients;
+             if (!hasSuccessfullyProcessedIngredients) {
+                 currentPantryCheckbox.checked = false; // Reset if disabled
+             }
+        }
+    }
+
+    // --- Function to Set Loading State for Review List Generation ---
+    function setReviewLoadingState(isLoading) {
+        const finalListSection = document.getElementById('final-list-section');
+        // Show/hide a simple text indicator within the review area or show/hide the section itself
+        if (isLoading) {
+            // Disable the "Review Final List" button while processing
+            if (createListButton) { 
+                createListButton.disabled = true; 
+                // Optionally add spinner to button text
+                createListButton.innerHTML = `${spinnerSVG} Generating List...`;
+            }
+            // Optionally hide the final section until loading is complete
+            // if (finalListSection) finalListSection.style.display = 'none';
+            // Or display a message within the review area
+            // if (reviewListArea) reviewListArea.innerHTML = '<p>Generating review list...</p>';
         } else {
-            console.log("Pantry checkbox unchecked - Re-checking common items.");
+            // Re-enable the button and restore text when done loading (success or error)
+            if (createListButton) { 
+                createListButton.disabled = false; 
+                createListButton.innerHTML = 'Review Final List'; // Restore original text
+            }
+            // Section visibility is handled by displayReviewList on success
         }
     }
 
@@ -1555,6 +1546,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 existingCheckboxDiv.remove();
                 pantryCheckbox = null;
             }
+        }
+    }
+
+    // --- Function to Clear Review Area and Final Feedback --- 
+    function clearReviewAreaAndFinalLink() {
+        if (reviewListArea) {
+            reviewListArea.innerHTML = ''; // Clear the list display area
+            console.log("Cleared review list area.");
+        }
+        clearInstacartResults(); // Also clear any previous link/error/loading in the final feedback section
+        
+        // Hide the final list section when clearing (before new one is generated)
+        const finalListSection = document.getElementById('final-list-section');
+        if (finalListSection) {
+            finalListSection.classList.remove('opacity-100');
+            finalListSection.classList.add('opacity-0');
+             // Optionally set display none after transition
+             // Using timeout might be slightly fragile, relying on opacity might be better
+             // For now, let's just ensure opacity is 0.
+             // setTimeout(() => { 
+             //    if (!finalListSection.classList.contains('opacity-100')) { 
+             //         finalListSection.style.display = 'none';
+             //    }
+             // }, 300); 
         }
     }
 

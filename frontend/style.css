@@ -328,8 +328,7 @@ button:disabled {
     margin-top: 20px;
 }
 
-#instacart-link-area a,
-#instacart-link-area button {
+#instacart-link-area a {
     display: inline-block;
     margin-top: 10px;
     padding: 12px 25px; /* Larger button */
@@ -343,8 +342,7 @@ button:disabled {
     cursor: pointer;
 }
 
-#instacart-link-area a:hover,
-#instacart-link-area button:hover {
+#instacart-link-area a:hover {
     background-color: #218838;
 }
 

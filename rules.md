@@ -28,7 +28,8 @@ This document outlines key rules and best practices to follow during development
 6.  **Edit Verification:**
     *   **Problem:** Applying code edits, especially in structured files like `package.json` or configuration files, can inadvertently remove or modify unrelated but necessary lines if the edit context is imprecise.
     *   **Rule:** Before finalizing *any* code edit, mentally (or using diff tools) verify the *exact* changes being made. Pay special attention when modifying lists (like dependencies, routes, imports) or configuration blocks to ensure only the intended additions, deletions, or modifications are occurring, and that essential existing items are not accidentally removed.
-    *   **Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`) was unexpectedly removed, immediately point out the error and apply a corrective edit. 
+    *   **Rule Addendum:** When removing or refactoring a function, explicitly search the codebase for all locations where that function was called and ensure those call sites are also removed or updated appropriately to prevent `ReferenceError`s or logic errors.
+    *   **Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`, necessary function calls) was unexpectedly removed or left dangling, immediately point out the error and apply a corrective edit. 
 
 7.  **Variable Scope, Shadowing, and Declaration Order:**
     *   **Problem:** Accidentally re-declaring a variable within an inner scope (shadowing) or accessing `const`/`let` variables before their declaration (Temporal Dead Zone - TDZ) can lead to ReferenceErrors or unexpected behavior. This also applies to making up variable names that don't exist in the intended scope.
@@ -83,4 +84,17 @@ This document outlines key rules and best practices to follow during development
         1. Keep the initial HTML generation simple (e.g., default states).
         2. Place the logic that accesses or modifies these elements *after* the code that inserts the HTML into the DOM (e.g., after `element.innerHTML = ...`).
     *   **Verification:** Review code that dynamically generates HTML and then immediately interacts with it. Ensure the interaction logic runs *after* the HTML is part of the document, especially if the logic relies on elements created in the same dynamic block. 
+
+15. **CSS Specificity & Framework Integration:**
+    *   **Problem:** Integrating utility-first frameworks (like Tailwind) into projects with existing CSS (especially using IDs or complex selectors) can lead to unexpected style overrides due to CSS specificity rules.
+    *   **Rule:** When applying utility classes that don't seem to take effect (especially for layout, padding, color), use browser DevTools (Computed Styles panel) to check for higher-specificity rules from other stylesheets that might be overriding the utility classes. Prioritize resolving conflicts by removing or refactoring the overly specific legacy CSS rather than adding `!important` to utility classes.
+    *   **Verification:** Inspect computed styles in DevTools. Identify the source of conflicting rules and address the specificity conflict directly in the CSS.
+
+16. **Frontend/Backend Data Contracts:**
+    *   **Problem:** API calls can fail with seemingly generic errors (like 400 Bad Request) if the frontend sends data in a structure (e.g., object keys, array formats) that doesn't perfectly match what the backend API endpoint expects and validates.
+    *   **Rule:** Before making significant changes to data structures passed between frontend and backend, or when debugging API call failures:
+        1. Verify the exact structure the frontend is sending (log the data immediately before the `fetch` call).
+        2. Verify the exact structure the backend API endpoint expects (read the backend controller/handler code, focusing on `req.body` destructuring and validation logic).
+        3. Ensure the keys, data types, and nesting match precisely.
+    *   **Verification:** Log frontend payload. Read backend validation code. Compare structures side-by-side.
     

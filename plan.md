@@ -124,6 +124,16 @@ These issues directly impact the core value proposition or the demo user experie
     *   **[X] 4. Remove Single Recipe Card ('X' Button):** Allow users to dismiss individual failed/timed-out cards.
     *   **[X] 5. Transitions (Fade-in):** Add subtle transitions for new elements appearing.
     *   **[X] 6. Dynamic Title for Final List:** Display "Ingredients for [Recipe A] and [Recipe B]..." above the final list.
+*   **[X] Fix Final Button Click Error (JSON Parsing):**
+    *   **Problem:** Clicking "Shop with Instacart" fails with a JSON parsing error because `handleSendToInstacart` tries to read ingredient data from the `<li>` element's dataset instead of the checkbox's dataset where it's stored.
+    *   **Action:** Modify `handleSendToInstacart` in `script.js` to correctly select the checkbox within each list item and parse `checkbox.dataset.itemData`. **(DONE)**
+*   **[X] Fix Final Button Visual Layout (Systematic Debugging):**
+    *   **Problem:** The "Shop with Instacart" button does not visually match the spec (incorrect height/padding/alignment).
+    *   **Action 1 (Inspect Element):** Use browser DevTools to inspect the computed styles (`height`, `padding`, `box-sizing`, `align-items`, `line-height`) and applied CSS rules for the button (`#sendToInstacartButton`), the SVG (`img`), and the text (`span`). Verify they match the intended values (46px height, 16px vertical pad, 18px horizontal pad, flex center, etc.) and identify any conflicting styles. **(DONE - Identified conflicting rule in style.css)**
+    *   **Action 2 (Isolate CSS):** Temporarily comment out the link to `style.css` in `index.html`, rebuild Tailwind CSS (`npm run build:css`), and check if the button renders correctly with only Tailwind styles. If it does, the conflict lies within `style.css`. **(DONE - Confirmed conflict)**
+    *   **(If needed) Action 3 (Simplify Structure):** Temporarily remove the SVG or the text span from the button HTML to see if either element alone renders correctly within the button's dimensions.
+    *   **(If needed) Action 4 (Verify Tailwind Build):** Check `frontend/styles/output.css` to ensure the custom classes (`.h-46px`, `.px-18px`) are defined correctly.
+    *   **Action 5 (Implement Fix):** Based on the findings, apply the necessary fix (e.g., remove conflicting CSS, adjust Tailwind classes, fix HTML structure). **(DONE - Removed conflicting rule from style.css)**
 
 ---
 
