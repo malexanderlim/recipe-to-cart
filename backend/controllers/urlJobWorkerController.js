@@ -1,6 +1,6 @@
 const { Receiver } = require("@upstash/qstash");
 const { redis } = require("../services/redisService");
-const jsdom = require("jsdom");
+const { JSDOM } = require("jsdom");
 const { Readability } = require("@mozilla/readability");
 const cheerio = require("cheerio");
 const axios = require("axios"); // Using axios as per original skeleton
