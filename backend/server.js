@@ -28,15 +28,19 @@ const urlJobRoutes = require('./routes/urlJobRoutes');
 const jobStatusRoutes = require('./routes/jobStatusRoutes');
 const listRoutes = require('./routes/listRoutes');
 const instacartRoutes = require('./routes/instacartRoutes');
+const processImageWorkerRoutes = require('./routes/processImageWorkerRoutes'); // Import the new image worker route
+const processUrlJobWorkerRoutes = require('./routes/processUrlJobWorkerRoutes'); // Import the new URL worker route
 
 // --- API Routes --- 
 // Apply the upload middleware specifically to the upload route
 app.use('/api/upload', uploadRoutes);
 app.use('/api/process-image', processImageRoutes);
 // app.use('/api/process-text', processTextRoutes); // Remove old route mounting
+app.use('/api/process-image-worker', processImageWorkerRoutes); // Mount the new image worker route
 app.use('/api/process-text-worker', processTextWorkerRoutes); // Mount new worker route
 app.use('/api/process-url', urlRoutes);
 app.use('/api/process-url-job', urlJobRoutes);
+app.use('/api/process-url-job-worker', processUrlJobWorkerRoutes); // Mount the new URL worker route
 app.use('/api/job-status', jobStatusRoutes);
 app.use('/api/create-list', listRoutes);
 app.use('/api/send-to-instacart', instacartRoutes);
