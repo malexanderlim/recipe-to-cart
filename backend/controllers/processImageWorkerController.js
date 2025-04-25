@@ -112,8 +112,8 @@ async function handleProcessImageJob(req, res) {
         }
         console.log(`[Process Image Worker Job ${jobId}] Text validation passed.`);
 
-        // 6. On Vision Success: Update Redis & Trigger Next Step (Text Processing Worker) via QStash Enqueue
-        console.log(`[Process Image Worker Job ${jobId}] Vision successful. Updating Redis and triggering text processor queue...`);
+        // 6. On Vision Success: Update Redis & Trigger Next Step (Text Processing Worker) via QStash Publish
+        console.log(`[Process Image Worker Job ${jobId}] Vision successful. Updating Redis and triggering text processor topic...`);
         const visionCompleteData = {
             ...jobData, // Keep original data (baseUrl might still be there, that's okay)
             status: 'vision_completed',
@@ -123,38 +123,38 @@ async function handleProcessImageJob(req, res) {
         await redis.set(jobId, JSON.stringify(visionCompleteData));
         console.log(`[Process Image Worker Job ${jobId}] Redis status updated to vision_completed.`);
 
-        // Trigger the next worker via Queue
-        const textQueueName = 'text-processing-jobs'; // Use queue name
+        // Trigger the next worker via Publish to Topic/Queue
+        const textTopicName = 'text-processing-jobs'; // Use topic/queue name
 
         if (!qstashClient) {
             throw new Error('QStash client not initialized');
         }
 
-        console.log(`[Process Image Worker Job ${jobId}] Enqueuing job to QStash queue: ${textQueueName}`);
+        console.log(`[Process Image Worker Job ${jobId}] Publishing job to QStash topic/queue: ${textTopicName}`);
         try {
-            await qstashClient.enqueueJSON({
-                // url: textWorkerUrl, // REMOVED
-                queue: textQueueName, // Use queue name
+            // Use publishJSON with the topic name provided to the 'url' parameter
+            await qstashClient.publishJSON({
+                url: textTopicName, // Target the topic/queue name via the URL parameter
                 body: { jobId: jobId },
                 retries: 3
             });
-            console.log(`[Process Image Worker Job ${jobId}] Job enqueued successfully to QStash text worker queue.`);
+            console.log(`[Process Image Worker Job ${jobId}] Job published successfully to QStash text worker topic/queue.`);
         } catch (qstashError) {
-            console.error(`[Process Image Worker Job ${jobId}] CRITICAL: Error enqueuing job to QStash text worker queue:`, qstashError);
-            const triggerFailData = {
+            console.error(`[Process Image Worker Job ${jobId}] CRITICAL: Error publishing job to QStash text worker topic/queue:`, qstashError);
+            const publishFailData = { // Renamed from triggerFailData/enqueueFailData
                 ...visionCompleteData,
                 status: 'failed',
-                error: `Processing Error: Failed to enqueue the text analysis step via queue. Reason: ${qstashError.message}`,
+                error: `Processing Error: Failed to publish the text analysis step to topic. Reason: ${qstashError.message}`, // Updated error message
                 finishedAt: Date.now()
             };
-            await redis.set(jobId, JSON.stringify(triggerFailData));
-            console.log(`[Process Image Worker Job ${jobId}] Updated Redis status to failed due to QStash enqueue error.`);
+            await redis.set(jobId, JSON.stringify(publishFailData));
+            console.log(`[Process Image Worker Job ${jobId}] Updated Redis status to failed due to QStash publish error.`);
             throw qstashError;
         }
 
         // 7. Return 200 OK to QStash
-        console.log(`[Process Image Worker Job ${jobId}] Job processed successfully, enqueued next step.`);
-        res.status(200).send('OK: Image processed, text analysis job enqueued');
+        console.log(`[Process Image Worker Job ${jobId}] Job processed successfully, published next step to topic.`);
+        res.status(200).send('OK: Image processed, text analysis job published to topic');
 
     } catch (error) {
         console.error(`[Process Image Worker Job ${jobId}] Error processing job:`, error);

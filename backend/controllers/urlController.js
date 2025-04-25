@@ -49,28 +49,28 @@ async function processUrl(req, res) {
         await redis.set(jobId, JSON.stringify(jobData), { ex: 86400 });
         console.log(`[${jobId}] Initial job data stored in Redis.`);
 
-        // 2. Trigger background job via QStash Enqueue
-        const urlQueueName = 'url-processing-jobs'; // Use queue name
+        // 2. Trigger background job via QStash Publish to Topic/Queue
+        const urlTopicName = 'url-processing-jobs'; // Use topic/queue name
 
-        console.log(`[${jobId}] Enqueuing job to QStash queue: ${urlQueueName}`);
+        console.log(`[${jobId}] Publishing job to QStash topic/queue: ${urlTopicName}`);
         try {
-            await qstashClient.enqueueJSON({
-                // url: urlWorkerUrl, // REMOVED
-                queue: urlQueueName, // Use queue name
+            // Use publishJSON with the topic name provided to the 'url' parameter
+            await qstashClient.publishJSON({
+                url: urlTopicName, // Target the topic/queue name via the URL parameter
                 body: { jobId: jobId },
                 retries: 3, // Use plan limit (max 3)
             });
-            console.log(`[${jobId}] Job enqueued successfully to QStash URL worker queue.`);
+            console.log(`[${jobId}] Job published successfully to QStash topic/queue.`);
         } catch (qstashError) {
-            console.error(`[${jobId}] CRITICAL: Error enqueuing job to QStash URL worker queue:`, qstashError);
-            const enqueueFailData = {
-                 ...jobData, // Use the data we just stored
+            console.error(`[${jobId}] CRITICAL: Error publishing job to QStash topic/queue:`, qstashError);
+            const publishFailData = { // Renamed from enqueueFailData
+                 ...jobData,
                  status: 'failed',
-                 error: 'Failed to queue URL job for processing via QStash queue. Please try again.',
+                 error: 'Failed to publish URL job for processing via QStash topic/queue. Please try again.', // Updated error message
                  finishedAt: Date.now()
              };
-             await redis.set(jobId, JSON.stringify(enqueueFailData));
-             console.log(`[${jobId}] Updated Redis status to failed due to QStash enqueue error.`);
+             await redis.set(jobId, JSON.stringify(publishFailData));
+             console.log(`[${jobId}] Updated Redis status to failed due to QStash publish error.`);
              return res.status(202).json({ jobId: jobId }); // Still return 202
         }
 

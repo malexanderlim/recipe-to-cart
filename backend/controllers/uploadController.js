@@ -67,30 +67,29 @@ async function handleUpload(req, res) {
         await redis.set(jobId, JSON.stringify(initialJobData), { ex: 86400 });
         console.log(`[Async Upload Job ${jobId}] Initial job state stored.`);
 
-        // 3. Trigger background processing via QStash Enqueue
-        const imageQueueName = 'image-processing-jobs'; // Use queue name
+        // 3. Trigger background processing via QStash Publish to Topic/Queue
+        const imageTopicName = 'image-processing-jobs'; // Use topic/queue name
 
-        console.log(`[Async Upload Job ${jobId}] Enqueuing job to QStash queue: ${imageQueueName}`);
+        console.log(`[Async Upload Job ${jobId}] Publishing job to QStash topic/queue: ${imageTopicName}`);
 
         try {
-            await qstashClient.enqueueJSON({
-                // url: imageWorkerUrl, // REMOVED
-                queue: imageQueueName, // Use queue name
+            // Use publishJSON with the topic name provided to the 'url' parameter
+            await qstashClient.publishJSON({
+                url: imageTopicName, // Target the topic/queue name via the URL parameter
                 body: { jobId: jobId },
                 retries: 3, // Use plan limit (max 3)
-                // delay: '1s' // Delay might be less common/useful with enqueue, removing for now
             });
-            console.log(`[Async Upload Job ${jobId}] Job enqueued successfully to QStash.`);
+            console.log(`[Async Upload Job ${jobId}] Job published successfully to QStash topic/queue.`);
         } catch (qstashError) {
-            console.error(`[Async Upload Job ${jobId}] CRITICAL: Error enqueuing job to QStash:`, qstashError);
-            const enqueueFailData = {
+            console.error(`[Async Upload Job ${jobId}] CRITICAL: Error publishing job to QStash topic/queue:`, qstashError);
+            const publishFailData = { // Renamed from enqueueFailData
                 ...initialJobData,
                 status: 'failed',
-                error: 'Failed to queue job for processing via QStash queue. Please try again.',
+                error: 'Failed to publish job for processing via QStash topic/queue. Please try again.', // Updated error message
                 finishedAt: Date.now()
              };
-             await redis.set(jobId, JSON.stringify(enqueueFailData));
-             console.log(`[Async Upload Job ${jobId}] Updated Redis status to failed due to QStash enqueue error.`);
+             await redis.set(jobId, JSON.stringify(publishFailData));
+             console.log(`[Async Upload Job ${jobId}] Updated Redis status to failed due to QStash publish error.`);
              return res.status(202).json({ jobId: jobId }); // Still return 202
         }
 
