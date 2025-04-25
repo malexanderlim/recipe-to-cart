@@ -491,6 +491,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderParsedIngredientsHTML(recipeData) {
         let html = `<h5 class="text-base font-medium text-gray-600 mb-2">Parsed Ingredients:</h5>`; 
         html += '<ul class="ingredients-list space-y-1">'; 
+        // *** ADD DEBUG LOG ***
+        console.log(`[renderParsedIngredientsHTML for ${recipeData.id}] Ingredients data received:`, JSON.stringify(recipeData.ingredients));
+        // *********************
         recipeData.ingredients.forEach((item, index) => {
             const isChecked = true; // Default to checked in the HTML string
 
