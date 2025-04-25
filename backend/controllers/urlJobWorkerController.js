@@ -1,5 +1,5 @@
 const { Receiver } = require("@upstash/qstash");
-const kv = require("../services/kvService"); // Use KV service
+const { redis } = require("../services/redisService"); // USE REDIS SERVICE CONSISTENTLY
 
 // --- Dependencies copied from urlJobController --- 
 // Dynamic import for node-fetch (needed for HTML fetching)
@@ -17,20 +17,20 @@ const qstashReceiver = new Receiver({
     nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
 });
 
-// --- Helper function to update job status in KV --- (Adapted from urlJobController's Redis helper)
-async function updateUrlJobStatusInKV(jobId, status, data = {}) {
-    if (!kv) {
-        console.error(`[${jobId}] KV client not available in updateUrlJobStatusInKV. Cannot update status to ${status}.`);
-        return; // Or throw an error if critical
+// --- Helper function to update job status in Redis --- (Adapted & renamed)
+async function updateUrlJobStatusInRedis(jobId, status, data = {}) {
+    if (!redis) { // Check redis
+        console.error(`[${jobId}] Redis client not available in updateUrlJobStatusInRedis. Cannot update status to ${status}.`);
+        return;
     }
     try {
-        let currentData = await kv.get(jobId);
+        const jobDataString = await redis.get(jobId); // Use redis.get
+        let currentData = jobDataString ? JSON.parse(jobDataString) : null;
         if (!currentData) {
-            console.warn(`[${jobId}] Job data not found in KV when trying to update status to ${status}. Initializing.`);
+            console.warn(`[${jobId}] Job data not found in Redis when trying to update status to ${status}. Initializing.`);
             currentData = { jobId: jobId, startTime: Date.now(), status: 'unknown' }; 
         }
 
-        // Ensure data is an object before spreading
         const dataToMerge = (typeof data === 'object' && data !== null) ? data : {};
         const newData = { ...currentData, status, ...dataToMerge };
 
@@ -45,15 +45,14 @@ async function updateUrlJobStatusInKV(jobId, status, data = {}) {
             console.log(`[${jobId}] Status updated to ${status}.`);
         }
 
-        // Use kv.set - assuming it handles stringification if needed, or pass object directly
-        // Adjust if kvService expects specific format
-        await kv.set(jobId, newData); 
+        // Use redis.set with stringify
+        await redis.set(jobId, JSON.stringify(newData), { ex: 86400 }); 
 
     } catch (error) {
-        console.error(`[${jobId}] Failed to update job status to ${status} in KV:`, error);
+        console.error(`[${jobId}] Failed to update job status to ${status} in Redis:`, error);
     }
 }
-// --- End KV Update Helper ---
+// --- End Redis Update Helper ---
 
 // --- Helper: parseYieldString (Copied EXACTLY from urlJobController) ---
 function parseYieldString(yieldStr) {
@@ -115,27 +114,32 @@ const processUrlJobWorkerHandler = async (req, res) => {
     try {
         // --- Logic Copied & Adapted from urlJobController --- 
         
-        /* 1) Load job record from KV */
-        if (!kv) { throw new Error('KV client not available in processUrlJobWorkerHandler'); }
-        jobData = await kv.get(jobId);
+        /* 1) Load job record from Redis */
+        if (!redis) { throw new Error('Redis client not available in processUrlJobWorkerHandler'); } // Check redis
+        const jobDataString = await redis.get(jobId); // Use redis.get
+        if (!jobDataString) {
+            console.warn(`[Worker - URL Handler Job ${jobId}] Job not found in Redis. Aborting.`);
+            return res.status(200).json({ message: 'Job already processed or not found.' });
+        }
+        jobData = JSON.parse(jobDataString); // Parse
 
-        if (!jobData || ['completed', 'failed'].includes(jobData.status)) {
-            console.warn(`[Worker - URL Handler Job ${jobId}] Job not found in KV or already processed (${jobData?.status}).`);
+        if (['completed', 'failed'].includes(jobData.status)) {
+            console.warn(`[Worker - URL Handler Job ${jobId}] Job already processed (${jobData?.status}).`);
             return res.status(200).json({ message: 'Job already processed or not found.' });
         }
 
         const { inputUrl } = jobData;
         if (!inputUrl) {
-            throw new Error('Job data from KV is missing inputUrl.');
+            throw new Error('Job data from Redis is missing inputUrl.');
         }
-        await updateUrlJobStatusInKV(jobId, 'processing_started'); 
+        await updateUrlJobStatusInRedis(jobId, 'processing_started'); // Use Redis helper
         console.log(`[Worker - URL Handler Job ${jobId}] Processing URL: ${inputUrl}`);
 
         /* 2) Fetch HTML */
         let htmlContent = '';
         let finalUrl = inputUrl;
         try {
-            await updateUrlJobStatusInKV(jobId, 'fetching_html'); 
+            await updateUrlJobStatusInRedis(jobId, 'fetching_html'); 
             console.log(`[Worker - URL Handler Job ${jobId}] Fetching HTML…`);
             const response = await fetch(inputUrl, { /* headers, redirect, timeout */ 
                  headers: { /* Copied exactly from old controller */
@@ -163,14 +167,14 @@ const processUrlJobWorkerHandler = async (req, res) => {
             }
         } catch (fetchErr) {
             console.error(`[Worker - URL Handler Job ${jobId}] Fetching HTML failed:`, fetchErr);
-            await updateUrlJobStatusInKV(jobId, 'failed', { error: `Failed to fetch URL: ${fetchErr.message}` });
-            return res.status(200).json({ message: 'Fetch failed, job status updated.' }); // Respond OK to QStash
+            await updateUrlJobStatusInRedis(jobId, 'failed', { error: `Failed to fetch URL: ${fetchErr.message}` }); // Use Redis helper
+            return res.status(200).json({ message: 'Fetch failed, job status updated.' });
         }
 
         /* 3) Attempt JSON-LD extraction */
         let recipeResult = null;
         try {
-            await updateUrlJobStatusInKV(jobId, 'parsing_jsonld'); 
+            await updateUrlJobStatusInRedis(jobId, 'parsing_jsonld'); 
             const $ = cheerio.load(htmlContent);
             let recipeJson = null;
             // findRecipe helper (Copied exactly)
@@ -200,7 +204,7 @@ const processUrlJobWorkerHandler = async (req, res) => {
                         else if (typeof rawYield === 'object' && rawYield !== null) { const q = rawYield.value ?? rawYield.yieldValue ?? rawYield.valueReference?.value ?? null; const u = rawYield.unitText ?? rawYield.unitCode ?? rawYield.valueReference?.unitText ?? null; if (q != null) { const qtyNum = parseFloat(String(q).replace(',', '.')) || null; if (qtyNum) parsedYield = { quantity: qtyNum, unit: u || null }; } else if (rawYield.description) { parsedYield = parseYieldString(String(rawYield.description)); } }
                     }
                     // LLM call for ingredients (Copied exactly)
-                    await updateUrlJobStatusInKV(jobId, 'llm_parsing_ingredients'); 
+                    await updateUrlJobStatusInRedis(jobId, 'llm_parsing_ingredients'); 
                     const sysPrompt = 'You are an expert ingredient parser... Respond ONLY with that JSON.'; // Exact prompt
                     const userPrompt = 'Ingredient List:\n' + ingredientStrings.map((s) => `- ${s}`).join('\n');
                     const llmResp = await callAnthropic(sysPrompt, userPrompt);
@@ -215,13 +219,13 @@ const processUrlJobWorkerHandler = async (req, res) => {
                 }
             }
         } catch (jsonLdErr) {
-            console.error(`[Worker - URL Handler Job ${jobId}] JSON-LD phase error:`, jsonLdErr); // Log but continue to fallback
+            console.error(`[Worker - URL Handler Job ${jobId}] JSON-LD phase error:`, jsonLdErr);
         }
 
         /* 4) Fallback: Readability + LLM */
         if (!recipeResult) {
             try {
-                await updateUrlJobStatusInKV(jobId, 'parsing_readability'); 
+                await updateUrlJobStatusInRedis(jobId, 'parsing_readability'); 
                 const doc = new JSDOM(htmlContent, { url: finalUrl });
                 const article = new Readability(doc.window.document).parse();
                 if (!article?.textContent) throw new Error('Readability could not extract any text content.');
@@ -230,7 +234,7 @@ const processUrlJobWorkerHandler = async (req, res) => {
                 // LLM Call (Copied exactly)
                 const sysPrompt = 'You are an expert recipe parser... Output ONLY a single valid JSON object...'; // Exact prompt
                 const userPrompt = `Recipe Text:\n---\n${mainText}\n---`;
-                await updateUrlJobStatusInKV(jobId, 'llm_parsing_fallback'); 
+                await updateUrlJobStatusInRedis(jobId, 'llm_parsing_fallback'); 
                 const raw = await callAnthropic(sysPrompt, userPrompt);
                 const parsed = await parseAndCorrectJson(jobId, raw, 'object');
                 if (parsed?.ingredients?.length) {
@@ -243,40 +247,40 @@ const processUrlJobWorkerHandler = async (req, res) => {
                 } else { throw new Error('LLM response lacked expected structure.'); }
             } catch (fallbackErr) {
                 console.error(`[Worker - URL Handler Job ${jobId}] Readability / fallback error:`, fallbackErr);
-                await updateUrlJobStatusInKV(jobId, 'failed', { error: `Fallback extraction failed: ${fallbackErr.message}` });
-                return res.status(200).json({ message: 'Fallback failed, job updated.' }); // Respond OK to QStash
+                await updateUrlJobStatusInRedis(jobId, 'failed', { error: `Fallback extraction failed: ${fallbackErr.message}` }); // Use Redis helper
+                return res.status(200).json({ message: 'Fallback failed, job updated.' });
             }
         }
 
-        /* 5) Final KV update + response */
+        /* 5) Final Redis update + response */
         if (recipeResult) {
-            await updateUrlJobStatusInKV(jobId, 'completed', { result: recipeResult }); 
-            console.log(`[Worker - URL Handler Job ${jobId}] Processing complete, result stored in KV.`);
+            await updateUrlJobStatusInRedis(jobId, 'completed', { result: recipeResult }); // Use Redis helper
+            console.log(`[Worker - URL Handler Job ${jobId}] Processing complete, result stored in Redis.`);
         } else {
-            await updateUrlJobStatusInKV(jobId, 'failed', { error: 'Finished without extracting a valid recipe.' });
+            await updateUrlJobStatusInRedis(jobId, 'failed', { error: 'Finished without extracting a valid recipe.' }); // Use Redis helper
             console.error(`[Worker - URL Handler Job ${jobId}] Finished unexpectedly without result.`);
         }
         
         // --- End Copied Logic --- 
         
         console.log(`[Worker - URL Handler Job ${jobId}] Successfully processed job.`);
-        res.status(200).send("URL Processing complete."); // Respond OK to QStash
+        res.status(200).send("URL Processing complete.");
 
     } catch (error) {
         console.error(`[Worker - URL Handler Job ${jobId}] CRITICAL worker error:`, error);
-        const currentJobId = jobId || req.body?.jobId; // Ensure we have the jobId
-        if (currentJobId && kv) {
+        const currentJobId = jobId || req.body?.jobId;
+        if (currentJobId && redis) { // Check redis
             try {
-                // Attempt to update KV status to failed
-                const existingData = jobData || await kv.get(currentJobId) || {}; 
-                await updateUrlJobStatusInKV(currentJobId, 'failed', { 
+                // Attempt to update Redis status to failed
+                const existingDataString = await redis.get(currentJobId); // Use redis.get
+                const existingData = existingDataString ? JSON.parse(existingDataString) : {};
+                await updateUrlJobStatusInRedis(currentJobId, 'failed', { // Use Redis helper
                      error: `Unexpected worker error: ${error.message}` 
                 });
-            } catch (kvError) {
-                console.error(`[Worker - URL Handler Job ${currentJobId}] Failed to update KV status to 'failed' in catch block:`, kvError);
+            } catch (redisError) {
+                console.error(`[Worker - URL Handler Job ${currentJobId}] Failed to update Redis status to 'failed' in catch block:`, redisError);
             }
         }
-        // Return 500 to indicate failure to QStash (it might retry based on config)
         res.status(500).send("Internal Server Error during URL processing");
     }
 };

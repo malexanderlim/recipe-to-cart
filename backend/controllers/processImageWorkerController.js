@@ -1,5 +1,5 @@
 const { Receiver } = require("@upstash/qstash");
-const kv = require("../services/kvService"); // Use KV service instead of Redis directly for consistency
+const { redis } = require("../services/redisService"); // USE REDIS SERVICE CONSISTENTLY
 const heicConvert = require('heic-convert');
 const { visionClient } = require('../services/googleVisionService');
 const { Client } = require("@upstash/qstash"); // Import QStash Client
@@ -51,15 +51,15 @@ const processImageWorkerHandler = async (req, res) => {
     let jobData; // Define here for access in catch block
 
     try {
-        // 2. Retrieve Job Data from KV
-        console.log(`[Worker - Image Handler Job ${jobId}] Fetching job details from KV...`);
-        if (!kv) { throw new Error('KV client not initialized'); }
-        jobData = await kv.get(jobId);
-        if (!jobData) {
-            console.warn(`[Worker - Image Handler Job ${jobId}] Job data not found in KV. Aborting.`);
-            // No need to update status if job doesn't exist
+        // 2. Retrieve Job Data from Redis (Using redis.get)
+        console.log(`[Worker - Image Handler Job ${jobId}] Fetching job details from Redis...`);
+        if (!redis) { throw new Error('Redis client not initialized'); } // Check redis
+        const jobDataString = await redis.get(jobId); // Use redis.get, returns string or null
+        if (!jobDataString) {
+            console.warn(`[Worker - Image Handler Job ${jobId}] Job data not found in Redis. Aborting.`);
             return res.status(200).json({ message: `Job data not found for ${jobId}, likely expired or invalid.` });
         }
+        jobData = JSON.parse(jobDataString); // Parse the string from Redis
         console.log(`[Worker - Image Handler Job ${jobId}] Retrieved job data status: ${jobData.status}`);
 
         // Check if job is already processed or failed
@@ -69,7 +69,7 @@ const processImageWorkerHandler = async (req, res) => {
         }
         const { blobUrl, originalFilename } = jobData;
         if (!blobUrl) {
-            throw new Error('Job data fetched from KV is missing blobUrl.');
+            throw new Error('Job data fetched from Redis is missing blobUrl.');
         }
         console.log(`[Worker - Image Handler Job ${jobId}] Retrieved blobUrl: ${blobUrl}`);
 
@@ -126,7 +126,7 @@ const processImageWorkerHandler = async (req, res) => {
         } catch (visionError) {
              console.error(`[Worker - Image Handler Job ${jobId}] Google Vision API call failed:`, visionError);
              // Update status specifically for Vision failure before re-throwing
-             await kv.set(jobId, { ...jobData, status: 'failed', error: 'Could not read text from the image.', finishedAt: Date.now() });
+             await redis.set(jobId, JSON.stringify({ ...jobData, status: 'failed', error: 'Could not read text from the image.', finishedAt: Date.now() })); // USE REDIS.SET
              throw visionError; // Re-throw to be caught by outer catch for response handling
         }
         // ---------------------------------------------------------
@@ -140,22 +140,22 @@ const processImageWorkerHandler = async (req, res) => {
                 error: 'Image does not contain enough readable text to be a recipe.', 
                 finishedAt: Date.now() 
             };
-            await kv.set(jobId, JSON.stringify(quickFailData)); // Ensure data is stringified for KV if needed, or use kv.set directly
-            console.log(`[Worker - Image Handler Job ${jobId}] Set KV status to 'failed' due to quick fail.`);
+            await redis.set(jobId, JSON.stringify(quickFailData)); // USE REDIS.SET
+            console.log(`[Worker - Image Handler Job ${jobId}] Set Redis status to 'failed' due to quick fail.`);
             return res.status(200).json({ message: `Job ${jobId} failed: Not enough readable text.` }); // Respond OK to QStash
         }
         // ------------------------------------------------------
 
-        // --- Update KV Status and Trigger Next Step via QStash (Logic from Old Controller) ---
-        console.log(`[Worker - Image Handler Job ${jobId}] Vision processing successful. Updating KV status to 'vision_completed'.`);
+        // --- Update Redis Status and Trigger Next Step via QStash (Logic from Old Controller) ---
+        console.log(`[Worker - Image Handler Job ${jobId}] Vision processing successful. Updating Redis status to 'vision_completed'.`);
         const visionCompletedData = {
             ...jobData,
             status: 'vision_completed',
             extractedText: extractedText, // Store extracted text for the next step
             visionFinishedAt: Date.now()
         };
-        await kv.set(jobId, JSON.stringify(visionCompletedData)); // Use kv.set, ensure data is stringified if needed
-        console.log(`[Worker - Image Handler Job ${jobId}] KV updated. Triggering next step via QStash.`);
+        await redis.set(jobId, JSON.stringify(visionCompletedData)); // USE REDIS.SET
+        console.log(`[Worker - Image Handler Job ${jobId}] Redis updated. Triggering next step via QStash.`);
 
         if (!qstashClient) {
              throw new Error("QStash client not initialized (for publishing). Cannot trigger next step.");
@@ -186,16 +186,14 @@ const processImageWorkerHandler = async (req, res) => {
             console.log(`[Worker - Image Handler Job ${jobId}] Successfully published job to QStash Text Worker. Message ID: ${publishResponse.messageId}`);
         } catch (qstashError) {
             console.error(`[Worker - Image Handler Job ${jobId}] CRITICAL: Failed to publish job to QStash Text Worker. Error:`, qstashError);
-            // Update KV status to 'failed' as the trigger failed
             const triggerFailData = {
                 ...visionCompletedData,
                 status: 'failed',
                 error: 'Processing Error: Failed to trigger the text analysis step.',
                 finishedAt: Date.now()
             };
-            await kv.set(jobId, JSON.stringify(triggerFailData)); // Use kv.set
-            console.log(`[Worker - Image Handler Job ${jobId}] Updated KV status to 'failed' due to QStash publish error.`);
-            // Still respond 200 to the initial QStash message, but the job status reflects the failure.
+            await redis.set(jobId, JSON.stringify(triggerFailData)); // USE REDIS.SET
+            console.log(`[Worker - Image Handler Job ${jobId}] Updated Redis status to 'failed' due to QStash publish error.`);
             return res.status(200).json({ message: `Job ${jobId} failed during trigger to next step.` });
         }
         // --------------------------------------------------------------------------------
@@ -205,23 +203,23 @@ const processImageWorkerHandler = async (req, res) => {
 
     } catch (error) {
         console.error(`[Worker - Image Handler Job ${jobId}] Error processing job:`, error);
-        const currentJobId = jobId || req.body?.jobId; // Ensure we have the jobId
-        if (currentJobId && kv) {
+        const currentJobId = jobId || req.body?.jobId;
+        if (currentJobId && redis) { // Check redis
             try {
-                // Attempt to update KV status to failed, merging with existing data if possible
-                const existingData = jobData || await kv.get(currentJobId) || {}; 
-                await kv.set(currentJobId, JSON.stringify({ 
+                // Attempt to update Redis status to failed
+                const existingDataString = await redis.get(currentJobId); // Use redis.get
+                const existingData = existingDataString ? JSON.parse(existingDataString) : {}; 
+                await redis.set(currentJobId, JSON.stringify({ // Use redis.set
                     ...existingData, 
                     status: 'failed', 
                     error: error.message || 'Image worker failed unexpectedly', 
                     finishedAt: Date.now()
                 }));
-                console.log(`[Worker - Image Handler Job ${currentJobId}] Updated KV status to 'failed' in catch block.`);
-            } catch (kvError) {
-                console.error(`[Worker - Image Handler Job ${currentJobId}] Failed to update KV status to 'failed' in catch block:`, kvError);
+                console.log(`[Worker - Image Handler Job ${currentJobId}] Updated Redis status to 'failed' in catch block.`);
+            } catch (redisError) {
+                console.error(`[Worker - Image Handler Job ${currentJobId}] Failed to update Redis status to 'failed' in catch block:`, redisError);
             }
         }
-        // Return 500 to indicate failure to QStash (it might retry based on config)
         res.status(500).send("Internal Server Error during image processing");
     }
 };
