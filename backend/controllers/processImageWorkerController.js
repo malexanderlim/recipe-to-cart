@@ -48,18 +48,17 @@ const processImageWorkerHandler = async (req, res) => {
     }
     console.log(`[Worker - Image Handler Job ${jobId}] Processing job ID: ${jobId}`);
 
-    let jobData; // Define here for access in catch block
+    let jobData;
 
     try {
         // 2. Retrieve Job Data from Redis (Using redis.get)
         console.log(`[Worker - Image Handler Job ${jobId}] Fetching job details from Redis...`);
-        if (!redis) { throw new Error('Redis client not initialized'); } // Check redis
-        const jobDataString = await redis.get(jobId); // Use redis.get, returns string or null
-        if (!jobDataString) {
+        if (!redis) { throw new Error('Redis client not initialized'); } 
+        jobData = await redis.get(jobId); // Use redis.get, returns OBJECT or null
+        if (!jobData) {
             console.warn(`[Worker - Image Handler Job ${jobId}] Job data not found in Redis. Aborting.`);
             return res.status(200).json({ message: `Job data not found for ${jobId}, likely expired or invalid.` });
         }
-        jobData = JSON.parse(jobDataString); // Parse the string from Redis
         console.log(`[Worker - Image Handler Job ${jobId}] Retrieved job data status: ${jobData.status}`);
 
         // Check if job is already processed or failed
@@ -204,17 +203,17 @@ const processImageWorkerHandler = async (req, res) => {
     } catch (error) {
         console.error(`[Worker - Image Handler Job ${jobId}] Error processing job:`, error);
         const currentJobId = jobId || req.body?.jobId;
-        if (currentJobId && redis) { // Check redis
+        if (currentJobId && redis) { 
             try {
                 // Attempt to update Redis status to failed
-                const existingDataString = await redis.get(currentJobId); // Use redis.get
-                const existingData = existingDataString ? JSON.parse(existingDataString) : {}; 
-                await redis.set(currentJobId, JSON.stringify({ // Use redis.set
-                    ...existingData, 
+                const existingData = await redis.get(currentJobId); // Use redis.get, returns OBJECT or null
+                const dataToSet = {
+                    ...(existingData || {}), // Handle null case for existingData
                     status: 'failed', 
                     error: error.message || 'Image worker failed unexpectedly', 
                     finishedAt: Date.now()
-                }));
+                };
+                await redis.set(currentJobId, JSON.stringify(dataToSet));
                 console.log(`[Worker - Image Handler Job ${currentJobId}] Updated Redis status to 'failed' in catch block.`);
             } catch (redisError) {
                 console.error(`[Worker - Image Handler Job ${currentJobId}] Failed to update Redis status to 'failed' in catch block:`, redisError);
