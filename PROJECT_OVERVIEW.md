@@ -11,16 +11,19 @@ The primary goal of this application is to allow users to easily convert recipes
     *   Images: Display previews (if possible).
     *   URLs: Minimal validation.
 3.  **Backend Trigger:** Frontend sends image data or URL to the backend (`/api/upload` or `/api/process-url`).
-4.  **Asynchronous Analysis (Backend + QStash):**
-    *   The backend receives the request and publishes a job to QStash.
-    *   For images: The job involves calling Google Cloud Vision API for text extraction (OCR).
-    *   For URLs: The job involves scraping the URL for recipe content (ingredients, potentially yield).
-    *   This offloads potentially long-running tasks.
-5.  **QStash Webhook:** Once the Vision API or scraping task completes, QStash calls a designated backend webhook (`/api/qstash`) with the results (extracted text, ingredients).
-6.  **Status Update & Result Display (Backend -> Frontend):**
-    *   The webhook handler processes the results.
-    *   The frontend polls or uses another mechanism (TBD, likely polling based on current structure) to get the status/results for each recipe source.
-    *   Extracted ingredients are displayed per recipe source in the "Extracted Recipes" section.
+4.  **Asynchronous Job Kick-off (Backend + QStash):**
+    *   The backend endpoint (`/api/upload` or `/api/process-url`) receives the request, stores initial job state in **Upstash Redis**, and immediately publishes a message to **Upstash QStash** specifying the appropriate background worker (`/api/process-image` or `/api/process-url-job`) and the `jobId`.
+    *   The endpoint returns `202 Accepted` with the `jobId` to the frontend.
+5.  **Background Worker Execution (QStash -> Backend):**
+    *   QStash reliably delivers the message (with retries if necessary) to the designated worker endpoint (`/api/process-image` or `/api/process-url-job`).
+    *   The worker endpoint verifies the QStash signature.
+    *   **Image Worker (`/api/process-image`):** Fetches job details from Redis, downloads image from Blob, performs OCR (Vision API), updates Redis status (`vision_completed`), and publishes *another* message to QStash targeting the text analysis worker (`/api/process-text-worker`).
+    *   **URL Worker (`/api/process-url-job`):** Fetches job details from Redis, scrapes/parses the URL, potentially calls an LLM for initial extraction, and updates Redis status (`completed` or `failed`).
+    *   **Text Worker (`/api/process-text-worker`):** (Triggered by image worker) Fetches job details (including OCR text) from Redis, calls Anthropic for ingredient parsing, and updates Redis status (`completed` or `failed`).
+6.  **Status Polling & Result Display (Frontend <-> Backend):**
+    *   The frontend polls `/api/job-status` using the `jobId`.
+    *   `/api/job-status` reads the current job status and results/error directly from **Upstash Redis**.
+    *   Extracted ingredients (or errors) are displayed per recipe source in the "Extracted Recipes" section.
 7.  **Review & Consolidation Trigger (Frontend -> Backend):**
     *   User reviews the extracted ingredients, potentially making minor adjustments (like unchecking pantry items).
     *   User clicks "Review Final List".
@@ -42,6 +45,8 @@ The primary goal of this application is to allow users to easily convert recipes
 *   **Frontend:** Vanilla HTML, CSS, JavaScript (`frontend/index.html`, `frontend/style.css`, `frontend/script.js`)
 *   **Backend:** Node.js with Express (`backend/server.js`)
 *   **Asynchronous Task Queue:** Upstash QStash
+*   **Job State Management:** Upstash Redis
+*   **Temporary File Storage:** Vercel Blob
 *   **Text Extraction (OCR):** Google Cloud Vision API
 *   **Ingredient Normalization/Parsing:** Anthropic Claude API (Haiku model)
 *   **Deployment:** Vercel (Targeted)
@@ -74,20 +79,38 @@ The primary goal of this application is to allow users to easily convert recipes
 ## 5. Backend API Endpoints
 
 *   **`POST /api/upload`**
-    *   **Controller:** (Likely `uploadController.js` or similar - TBD)
+    *   **Controller:** `uploadController.js`
     *   **Purpose:** Handles uploads of recipe image files.
-    *   **Action:** Saves temporary files (or uploads to cloud storage), then publishes a job to QStash containing image reference/data for OCR processing via Google Vision.
-    *   **Response:** Returns job identifiers or initial status.
+    *   **Action:** Saves image to Vercel Blob, stores initial job state (`pending`, `imageUrl`) in Redis, publishes a job message to **QStash** targeting `/api/process-image`.
+    *   **Response:** `202 Accepted` with `{ jobId }`.
 *   **`POST /api/process-url`**
-    *   **Controller:** `urlJobController.js` (or similar)
+    *   **Controller:** `urlController.js`
     *   **Purpose:** Handles submission of a recipe URL.
-    *   **Action:** Publishes a job to QStash containing the URL for scraping and ingredient extraction.
-    *   **Response:** Returns job identifiers or initial status.
-*   **`POST /api/qstash`**
-    *   **Controller:** (Likely `qstashHandler.js` or integrated into `server.js` - TBD)
-    *   **Purpose:** Acts as the webhook endpoint for QStash. Receives results from completed background jobs (Vision OCR or URL scraping).
-    *   **Action:** Verifies the QStash signature, parses the job result (extracted text/ingredients), potentially stores/updates job status, makes results available for frontend polling.
-    *   **Response:** `200 OK` to QStash on successful verification and processing.
+    *   **Action:** Stores initial job state (`pending`, `inputUrl`) in Redis, publishes a job message to **QStash** targeting `/api/process-url-job`.
+    *   **Response:** `202 Accepted` with `{ jobId }`.
+*   **`POST /api/process-image`**
+    *   **Triggered By:** QStash message from `/api/upload`.
+    *   **Controller:** `processImageController.js`
+    *   **Purpose:** Performs OCR on the image specified in the job data.
+    *   **Action:** Verifies QStash signature, fetches job data (incl. `imageUrl`) from Redis, downloads image, calls Vision API, updates Redis status (`vision_completed` or `failed`), publishes job message to **QStash** targeting `/api/process-text-worker` on success.
+    *   **Response:** `200 OK` or `500` status code back to QStash.
+*   **`POST /api/process-url-job`**
+    *   **Triggered By:** QStash message from `/api/process-url`.
+    *   **Controller:** `urlJobController.js`
+    *   **Purpose:** Scrapes and parses the recipe URL specified in the job data.
+    *   **Action:** Verifies QStash signature, fetches job data (incl. `inputUrl`) from Redis, fetches/parses HTML (JSON-LD/Readability), potentially calls LLM, updates Redis status (`completed` or `failed`).
+    *   **Response:** `200 OK` or `500` status code back to QStash.
+*   **`POST /api/process-text-worker`**
+    *   **Triggered By:** QStash message from `/api/process-image`.
+    *   **Controller:** `processTextWorkerController.js`
+    *   **Purpose:** Parses extracted text using Anthropic API.
+    *   **Action:** Verifies QStash signature, fetches job data (incl. `extractedText`) from Redis, calls Anthropic, updates Redis status (`completed` or `failed`).
+    *   **Response:** `200 OK` or `500` status code back to QStash.
+*   **`GET /api/job-status`**
+    *   **Controller:** `jobStatusController.js`
+    *   **Purpose:** Allows the frontend to poll for the status and results of a job.
+    *   **Action:** Reads job data directly from **Redis** using the provided `jobId`.
+    *   **Response:** JSON object containing `{ status, result?, error? }`.
 *   **`POST /api/create-list`**
     *   **Controller:** `backend/controllers/listController.js`
     *   **Purpose:** Takes the raw extracted ingredients from multiple sources (provided by the frontend after user review) and performs the final normalization and consolidation.
@@ -103,9 +126,11 @@ The primary goal of this application is to allow users to easily convert recipes
 *   **`backend/services/anthropicService.js`:**
     *   Contains the logic (`callAnthropic`) to interact with the Anthropic Claude API.
     *   Handles constructing the request, making the API call, and returning the raw response, including error handling and retry logic (if implemented).
-*   **QStash Integration (Implicit):**
-    *   **Publisher:** Code that uses the QStash SDK or API to publish messages (jobs) to a QStash URL (likely in `/api/upload` and `/api/process-url` handlers). Specifies the callback URL (`/api/qstash`).
-    *   **Receiver:** Middleware/handler for `/api/qstash` that uses `@upstash/qstash/verify` (or similar) to verify incoming webhook signatures before processing job results.
+*   **QStash Integration:**
+    *   **Publisher:** Code in `/api/upload`, `/api/process-url`, and `/api/process-image` uses the `@upstash/qstash` client (`Client`) to publish messages to QStash, specifying the full public URL of the target worker endpoint.
+    *   **Receiver:** Middleware in the worker routes (`/api/process-image`, `/api/process-url-job`, `/api/process-text-worker`) uses `@upstash/qstash` (`Receiver`) to verify incoming webhook signatures before executing controller logic.
+*   **Redis Integration:**
+    *   Uses `@upstash/redis` client to `set` and `get` job status and associated data, keyed by `jobId`.
 *   **`backend/utils/jsonUtils.js`:**
     *   Provides robust JSON parsing (`parseAndCorrectJson`), designed to handle potentially malformed or prefixed JSON responses from LLMs.
 *   **URL Scraping (Likely in `urlJobController.js` or a dedicated utility):**
@@ -117,18 +142,33 @@ The primary goal of this application is to allow users to easily convert recipes
 graph LR
     A[User: Upload Image/URL] --> B(Frontend: script.js);
     B --> C{Backend API: /api/upload OR /api/process-url};
-    C --> D[QStash: Publish Job];
-    D --> E{Background Worker/Job};
-    subgraph Background Job
-        direction TB
-        F(Google Vision API / URL Scraper) --> G(Extract Ingredients/Text);
+    C -- Job Info --> RDB[(Upstash Redis)];
+    C -- Publish Job Msg --> Q((QStash));
+    Q -- Deliver Msg --> W1{Worker: /api/process-image OR /api/process-url-job};
+    W1 -- Read Job Info --> RDB;
+    subgraph Image Worker Logic
+        direction LR
+        W1_IMG(Worker: /api/process-image) --> GVision[Google Vision API];
+        GVision --> W1_IMG;
+        W1_IMG -- Update Status & Extracted Text --> RDB;
+        W1_IMG -- Publish Text Job --> Q;
     end
-    E --> F;
-    G --> H[QStash: Callback];
-    H --> I(Backend API: /api/qstash);
-    I --> J[Store/Update Job Result];
-    K[Frontend: Poll for Results] --> J;
-    J --> K;
+    subgraph URL Worker Logic
+        direction LR
+        W1_URL(Worker: /api/process-url-job) --> Fetch[Fetch/Parse URL];
+        Fetch --> W1_URL;
+        W1_URL -- Optional --> LLM1[Anthropic API];
+        LLM1 --> W1_URL;
+        W1_URL -- Update Status/Result --> RDB;
+    end
+    Q -- Deliver Text Job --> W2(Worker: /api/process-text-worker);
+    W2 -- Read Job Info --> RDB;
+    W2 --> LLM2[Anthropic API];
+    LLM2 --> W2;
+    W2 -- Update Status/Result --> RDB;
+    K[Frontend: Poll /api/job-status] --> RDB_Poll(API: /api/job-status);
+    RDB_Poll -- Read Job Info --> RDB;
+    RDB_Poll --> K;
     K --> L[User: Review Extracted Ingredients];
     L --> M(Frontend: script.js);
     M --> N(Backend API: /api/create-list);
@@ -158,22 +198,35 @@ graph LR
             *   Handle fallback scenarios gracefully (using cleaned raw string if LLM fails normalization).
         *   **Rationale:** This balances the LLM's parsing strength with the reliability of code for math and business rules (Ref: `rules.md` Guideline #3).
 *   **Asynchronous Processing:**
-    *   **Challenge:** Calling external APIs (Vision, Anthropic, URL scraping) can be slow, blocking the request thread and potentially leading to timeouts or poor user experience.
-    *   **Solution:** Use QStash as a message queue/task runner. Backend endpoints (`/upload`, `/process-url`) quickly publish jobs to QStash and return. QStash handles execution and calls back `/api/qstash` upon completion. The frontend polls for results.
+    *   **Challenge:** Calling external APIs (Vision, Anthropic, URL scraping) can be slow, blocking the request thread and potentially leading to timeouts or poor user experience, especially on serverless platforms.
+    *   **Solution:** Use **Upstash QStash** as a reliable message queue for *all* asynchronous steps. Trigger endpoints (`/upload`, `/process-url`) immediately publish a job message to QStash and return `202 Accepted`. QStash guarantees delivery of the message to the appropriate backend worker endpoint (`/process-image`, `/process-url-job`). The image worker (`/process-image`) similarly uses QStash to trigger the text analysis worker (`/process-text-worker`). This decouples the workflow, leverages QStash's retries, and avoids function timeouts. Job state between steps is managed using **Upstash Redis**.
 *   **Credentials Management (Google Vision):**
     *   **Challenge:** Google Cloud client libraries need credentials. Locally, using a service account key file path is common. On deployment platforms like Vercel, using the JSON content stored in an environment variable is preferred.
     *   **Solution:** `googleVisionService.js` checks the `GOOGLE_APPLICATION_CREDENTIALS` environment variable. If it ends in `.json`, it assumes it's a path (resolves it relative to the project) and uses `keyFilename`. Otherwise, it assumes it's JSON content, parses it, and passes it via the `credentials` option.
+    *   **Additional Credentials:**
+        *   `ANTHROPIC_API_KEY=sk-...`
+        *   `INSTACART_API_KEY=...`
+        *   `UPSTASH_REDIS_REST_URL=...`
+        *   `UPSTASH_REDIS_REST_TOKEN=...`
+        *   `QSTASH_TOKEN=...`
+        *   `QSTASH_URL=https://qstash.upstash.io/v1/publish/...` (Usually not needed if publishing via SDK to URLs)
+        *   `QSTASH_CURRENT_SIGNING_KEY=...`
+        *   `QSTASH_NEXT_SIGNING_KEY=...`
+        *   `APP_BASE_URL=https://YOUR_NGROK_OR_CLOUDFLARED_URL` (Your public local tunnel URL for QStash callbacks)
 
 ## 9. Local Development
 
 *   **Environment Variables:** Create a `.env` file in the project root (or `backend` directory if `dotenv` path is set there). See `.env.example` if available, or populate required variables:
-    *   `GOOGLE_APPLICATION_CREDENTIALS=../recipe-vision-sa-key.json` (Relative path to your key file)
+    *   `GOOGLE_APPLICATION_CREDENTIALS=../recipe-vision-sa-key.json` (Relative path to your key file) OR JSON content.
     *   `ANTHROPIC_API_KEY=sk-...`
+    *   `INSTACART_API_KEY=...`
+    *   `UPSTASH_REDIS_REST_URL=...`
+    *   `UPSTASH_REDIS_REST_TOKEN=...`
     *   `QSTASH_TOKEN=...`
-    *   `QSTASH_URL=https://qstash.upstash.io/v1/publish/...`
+    *   `QSTASH_URL=https://qstash.upstash.io/v1/publish/...` (Usually not needed if publishing via SDK to URLs)
     *   `QSTASH_CURRENT_SIGNING_KEY=...`
     *   `QSTASH_NEXT_SIGNING_KEY=...`
-    *   `APP_BASE_URL=http://localhost:XXXX` (Your local tunnel URL for QStash callbacks)
+    *   `APP_BASE_URL=https://YOUR_NGROK_OR_CLOUDFLARED_URL` (Your public local tunnel URL for QStash callbacks)
 *   **Credentials File:** Place your downloaded Google Service Account key file (e.g., `recipe-vision-sa-key.json`) in the project root directory (as referenced in the `.env` example). Ensure this file is listed in `.gitignore`.
 *   **Running the Backend:** Use the provided script: `sh start_backend.sh`. This script likely sets `NODE_ENV=development` and ensures environment variables (including the SA key path) are correctly loaded.
 *   **QStash Tunneling:** QStash needs a public URL to send webhook callbacks to your local machine.
@@ -182,18 +235,20 @@ graph LR
         *   `ngrok http 3001`
         *   `cloudflared tunnel --url localhost:3001`
     3.  Copy the generated `https://*.ngrok.io` or `https://*.trycloudflare.com` URL.
-    4.  Set this URL as the `APP_BASE_URL` environment variable (or configure the QStash publishing code to use it for the callback URL). This ensures QStash sends results back to your running local server via the tunnel.
+    4.  Set this URL as the `APP_BASE_URL` environment variable. This ensures QStash sends results back to your running local server via the tunnel when using the SDK to publish to specific endpoint URLs.
 *   **Dependencies:** Run `npm install` (or `yarn install`).
 
 ## 10. Deployment (Vercel)
 
 *   **Environment Variables:** Configure the following environment variables in the Vercel project settings:
-    *   `GOOGLE_APPLICATION_CREDENTIALS`: **Paste the entire JSON content** of your service account key file here. Do NOT paste the file path.
+    *   `GOOGLE_APPLICATION_CREDENTIALS`: **Paste the entire JSON content** of your service account key file here.
     *   `ANTHROPIC_API_KEY`
+    *   `INSTACART_API_KEY`
+    *   `UPSTASH_REDIS_REST_URL`
+    *   `UPSTASH_REDIS_REST_TOKEN`
     *   `QSTASH_TOKEN`
-    *   `QSTASH_URL`
     *   `QSTASH_CURRENT_SIGNING_KEY`
     *   `QSTASH_NEXT_SIGNING_KEY`
-    *   `VERCEL_URL` (Often provided automatically by Vercel) - Ensure the QStash publishing code uses this (or constructs the appropriate public URL) for the callback URL.
+    *   `VERCEL_URL` (Provided automatically by Vercel) - Ensure the QStash publishing code uses this (prepending `https://`) for the callback URL when `APP_BASE_URL` isn't set.
 *   **Build Settings:** Configure Vercel build settings appropriately for a Node.js application (e.g., specifying the root directory, build command, output directory if necessary).
 *   **Serverless Functions:** Vercel will likely deploy the API routes as serverless functions. Ensure dependencies are correctly bundled. 

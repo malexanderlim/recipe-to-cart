@@ -9,10 +9,11 @@ A simple web application to extract ingredients from a recipe image and create a
 *   Uses Anthropic Claude API (via `.env` key) to parse ingredients, title, and yield.
 *   Allows scaling of recipe yield before adding to cart.
 *   Creates an Instacart shopping list using the Instacart Developer API (via `.env` key).
+*   Handles asynchronous processing reliably using Upstash QStash and Redis.
 
 ## Technology Stack & Architecture
 
-This project utilizes a modern web stack and a serverless architecture designed to handle potentially long-running image processing tasks efficiently.
+This project utilizes a modern web stack and a serverless architecture designed to handle potentially long-running image processing tasks efficiently and reliably.
 
 **Languages & Frameworks:**
 
@@ -26,25 +27,27 @@ This project utilizes a modern web stack and a serverless architecture designed 
     *   Initial parsing of raw OCR text to extract structured recipe data (title, yield, ingredients).
     *   Generating normalized ingredient names and purchasable unit conversion data for Instacart compatibility.
 *   **Instacart Connect API:** Used to create the final shopping list based on the processed ingredients.
+*   **Upstash QStash:** Used as a reliable message queue/task runner for all asynchronous background processing steps (image OCR, URL scraping, text analysis).
+*   **Upstash Redis:** Acts as a simple, fast database for managing asynchronous job status and intermediate results.
 *   **Vercel Platform:**
     *   **Serverless Functions:** Hosts the Node.js/Express backend API endpoints.
     *   **Blob Storage:** Provides temporary storage for uploaded images before processing.
-    *   **KV (Upstash Redis):** Acts as a simple, fast database for managing asynchronous job status and intermediate results.
 
 **Core Libraries:**
 
-*   **Backend:** `express`, `cors`, `multer` (image upload handling), `@google-cloud/vision`, `@anthropic-ai/sdk`, `axios` (API calls), `heic-convert` (HEIC/HEIF image support), `@vercel/blob`, `@vercel/kv` (Vercel services integration), `dotenv` (environment variables).
+*   **Backend:** `express`, `cors`, `multer` (image upload handling), `@google-cloud/vision`, `@anthropic-ai/sdk`, `axios` (API calls), `heic-convert` (HEIC/HEIF image support), `@vercel/blob`, `@upstash/redis`, `@upstash/qstash` (Upstash services integration), `jsdom`, `@mozilla/readability`, `cheerio` (URL processing), `dotenv` (environment variables).
 *   **Frontend:** No external libraries; relies on standard browser APIs (`fetch`, DOM manipulation).
 
 **Architectural Highlights:**
 
-*   **Asynchronous Processing Pipeline:** To overcome serverless function timeout limits (e.g., Vercel Hobby plan 10s limit), image processing is handled asynchronously:
-    1.  Frontend uploads image to a lightweight `/api/upload` endpoint.
-    2.  `/api/upload` stores the image in Vercel Blob, creates a job entry in Vercel KV (Redis), and immediately returns a `jobId`.
-    3.  `/api/upload` asynchronously triggers `/api/process-image` (via `fetch`, non-blocking).
-    4.  `/api/process-image` performs OCR (Vision API), updates job status in KV, and triggers `/api/process-text`.
-    5.  `/api/process-text` performs NLP parsing (Anthropic API) and updates KV with the final result or error.
-    6.  Frontend polls an `/api/job-status` endpoint using the `jobId` to retrieve the final status and results from KV.
+*   **QStash-Powered Asynchronous Pipeline:** To overcome serverless function timeout limits and ensure reliable execution, processing is handled asynchronously using Upstash QStash:
+    1.  Frontend uploads image or submits URL to a lightweight trigger endpoint (`/api/upload` or `/api/process-url`).
+    2.  The trigger endpoint stores the image in Vercel Blob (if applicable), creates a job entry in Upstash Redis (status `pending`), publishes a job message to QStash targeting the appropriate worker (`/api/process-image` or `/api/process-url-job`), and immediately returns a `jobId` (`202 Accepted`).
+    3.  QStash delivers the message to the worker endpoint, which verifies the signature.
+    4.  **Image Worker (`/api/process-image`):** Performs OCR (Vision API), updates job status in Redis, and publishes *another* QStash message targeting the text analysis worker (`/api/process-text-worker`).
+    5.  **URL Worker (`/api/process-url-job`):** Fetches and parses the URL, potentially calls an LLM, and updates job status in Redis.
+    6.  **Text Worker (`/api/process-text-worker`):** Performs NLP parsing (Anthropic API) and updates job status in Redis.
+    7.  Frontend polls an `/api/job-status` endpoint using the `jobId` to retrieve the final status and results from Redis.
 *   **Hybrid Ingredient Processing:** Combines LLM capabilities with deterministic backend logic:
     *   An LLM call (`/api/create-list`) analyzes the initially parsed ingredients to suggest `normalized_name`, `primary_unit` (purchasable), and `equivalent_units` conversion factors based on Instacart standards.
     *   Backend code then uses this LLM-generated data dictionary to perform the actual consolidation and unit conversion calculations reliably, avoiding LLM mathematical errors.
@@ -79,6 +82,19 @@ This project utilizes a modern web stack and a serverless architecture designed 
         # Required: Get from https://developer.instacart.com/
         INSTACART_API_KEY=your_instacart_developer_api_key_here
         
+        # Required: Get from Upstash Console (https://console.upstash.com/)
+        UPSTASH_REDIS_REST_URL=your_upstash_redis_url
+        UPSTASH_REDIS_REST_TOKEN=your_upstash_redis_token
+
+        # Required: Get from Upstash Console (QStash section)
+        QSTASH_TOKEN=your_qstash_token
+        QSTASH_CURRENT_SIGNING_KEY=your_qstash_current_signing_key
+        QSTASH_NEXT_SIGNING_KEY=your_qstash_next_signing_key
+
+        # Required for Local Development with QStash Callbacks:
+        # Your public tunnel URL (e.g., from ngrok or cloudflared)
+        APP_BASE_URL=https://your-tunnel-url.ngrok.io 
+
         # Optional: If running locally and haven't set up Google Cloud ADC, 
         # you might need to point to your service account key file.
         # GOOGLE_APPLICATION_CREDENTIALS=path/to/your-google-cloud-sa-key.json 
@@ -86,6 +102,15 @@ This project utilizes a modern web stack and a serverless architecture designed 
     *   **Google Cloud Vision API Setup:** Ensure you have Application Default Credentials (ADC) set up for Google Cloud, or uncomment and set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable in your `.env` file pointing to your service account key JSON.
 
 3.  **Frontend Setup:** No specific build steps required for the basic HTML/CSS/JS frontend.
+
+4.  **Local Development Tunnel (Required for QStash):**
+    *   QStash needs a public URL to send webhook callbacks to your local machine.
+    *   Start your backend server (e.g., on port `3001`).
+    *   In a separate terminal, use a tunneling service like `ngrok` or `cloudflared`:
+        *   `ngrok http 3001`
+        *   `cloudflared tunnel --url localhost:3001`
+    *   Copy the generated `https://*.ngrok.io` or `https://*.trycloudflare.com` URL.
+    *   Paste this URL as the value for `APP_BASE_URL` in your `backend/.env` file. This allows QStash messages published by your local server to be correctly routed back to your running worker endpoints via the tunnel.
 
 ## Running the Application
 
