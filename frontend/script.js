@@ -494,7 +494,10 @@ document.addEventListener('DOMContentLoaded', () => {
         recipeData.ingredients.forEach((item, index) => {
             const isChecked = true; // Default to checked in the HTML string
 
-            const ingredientText = `${item.quantity || ''} ${item.unit || ''} ${item.ingredient || ''}`.trim();
+            // FIX: Use item.raw which contains the full ingredient string
+            // const ingredientText = `${item.quantity || ''} ${item.unit || ''} ${item.ingredient || ''}`.trim();
+            const ingredientText = item.raw || 'Invalid Ingredient Data'; // Use raw string
+
             const uniqueId = `ingredient-${recipeData.id}-${index}`;
             html += `
                 <li class="flex items-center">
@@ -584,7 +587,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         hasCheckedIngredients = true;
                         return {
-                            ingredient: item.ingredient || 'Unknown Ingredient',
+                            // FIX: Send the raw ingredient string to the backend
+                            ingredient: item.raw || 'Unknown Ingredient', // Use item.raw
                             quantity: finalQuantity,
                             unit: item.unit // Keep original unit (or null) for backend processing
                         };
