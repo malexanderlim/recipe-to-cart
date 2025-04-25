@@ -667,7 +667,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Add helper text for review section
         const reviewHelper = document.createElement('p');
         reviewHelper.classList.add('text-sm', 'text-gray-600', 'mb-4');
-        reviewHelper.textContent = 'This is the final list after processing and combining items. Uncheck any items you don\'t want before creating the list.';
+        reviewHelper.textContent = "Review your combined shopping list. Uncheck any items you don't want before sending to Instacart.";
         reviewListArea.appendChild(reviewHelper);
 
         // *** Add Dynamic Title Header ***
@@ -937,77 +937,95 @@ document.addEventListener('DOMContentLoaded', () => {
     */
    // --- END DEPRECATED ---
 
-    // --- Function to create and add the pantry checkbox ---
+    // --- Function to create and add the master pantry checkbox/toggle ---
     function createPantryCheckbox() {
-        // Check if it already exists, remove if so (e.g., on re-upload or multiple completions)
-        const existingCheckboxDiv = document.getElementById('pantry-checkbox-container');
-        if (existingCheckboxDiv) {
-            console.log("Removing existing pantry checkbox before creating new one.");
-            existingCheckboxDiv.remove();
+        console.log("Attempting to create pantry checkbox/toggle...");
+        // Check if it already exists
+        if (document.getElementById('pantry-items-checkbox')) {
+            console.log("Pantry checkbox/toggle already exists.");
+            return; // Don't recreate if it's already there
         }
+        
+        const resultsSection = document.getElementById('results-section');
+        const recipeResultsContainer = document.getElementById('recipe-results-container');
 
-        // Only create if there are processed recipes with ingredients
-        const hasIngredients = processedRecipes.some(r => !r.error && r.ingredients && r.ingredients.length > 0);
-        if (!hasIngredients) {
-            console.log("Skipping pantry checkbox creation - no processed ingredients found.");
-            return;
-        }
-
-        console.log("Creating pantry checkbox...");
+        // Create the main container div for the toggle and its labels
         const containerDiv = document.createElement('div');
-        containerDiv.id = 'pantry-checkbox-container';
-        // Style the container: Flex layout, center items, add bottom margin
-        containerDiv.classList.add('flex', 'items-center', 'mb-4', 'px-1'); // Added padding for alignment
+        // Increased bottom margin for more space
+        containerDiv.classList.add('flex', 'items-center', 'mb-6', 'px-1'); 
 
-        // Create the checkbox input element
+        // --- Create the Toggle Switch Structure ---
+        const toggleLabelContainer = document.createElement('label');
+        toggleLabelContainer.classList.add('relative', 'inline-flex', 'items-center', 'cursor-pointer');
+
+        // Create the hidden checkbox input element (the 'peer')
         pantryCheckbox = document.createElement('input'); // Assign to the globally scoped variable
         pantryCheckbox.type = 'checkbox';
         pantryCheckbox.id = 'pantry-items-checkbox';
-        // Apply Tailwind classes for styling the checkbox
-        pantryCheckbox.classList.add(
-            'h-4', 
-            'w-4',
-            // Use a distinct color, maybe matching the 'Review' button or a neutral one
-            'text-green-600', // Example: Green to match Review button
-            'border-gray-300', 
-            'rounded',
-            'focus:ring-green-500', // Focus ring matching the color
-            'mr-2', // Margin to the right
-            'shrink-0' // Prevent checkbox from shrinking if label text is long
+        // Hide the default checkbox but keep it accessible and functional
+        pantryCheckbox.classList.add('sr-only', 'peer'); 
+
+        // Create the background track of the toggle
+        const toggleBackground = document.createElement('div');
+        toggleBackground.classList.add(
+            "w-9", "h-5", // Size (Smaller)
+            "bg-gray-200", // Default background
+            "peer-focus:outline-none", 
+            "peer-focus:ring-2", "peer-focus:ring-blue-300", // Focus ring (Smaller)
+            "dark:peer-focus:ring-blue-800", 
+            "rounded-full", // Shape
+            "peer", 
+            "dark:bg-gray-700", 
+            "peer-checked:after:translate-x-full", // Knob movement
+            "rtl:peer-checked:after:-translate-x-full", 
+            "peer-checked:after:border-white", // Knob border when checked
+            "after:content-['']", 
+            "after:absolute", "after:top-[1px]", "after:start-[1px]", // Knob position (Adjusted)
+            "after:bg-white", // Knob color
+            "after:border-gray-300", "after:border", // Knob border
+            "after:rounded-full", // Knob shape
+            "after:h-4", "after:w-4", // Knob size (Smaller)
+            "after:transition-all", // Knob transition
+            "dark:border-gray-600", 
+            "peer-checked:bg-blue-500" // Background color when checked (using primary blue)
         );
 
-        // Create the label for the checkbox
-        const label = document.createElement('label');
-        label.htmlFor = 'pantry-items-checkbox';
-        label.textContent = ' I have common pantry items'; // Leading space for visual separation
-        // Apply Tailwind classes for styling the label
-        label.classList.add('text-sm', 'font-medium', 'text-gray-700', 'cursor-pointer', 'select-none');
+        // Append the hidden checkbox and the background track to the toggle label container
+        toggleLabelContainer.appendChild(pantryCheckbox);
+        toggleLabelContainer.appendChild(toggleBackground);
+        
+        // --- Create the Text Label ---
+        const textLabel = document.createElement('span');
+        // Remove text-black class as inline style is used
+        textLabel.classList.add('ms-3', 'text-sm', 'font-medium', 'dark:text-gray-300'); 
+        textLabel.textContent = 'I have common pantry items'; 
+        // *** DIAGNOSTIC TEST: Apply inline style ***
+        textLabel.style.color = 'black';
 
-        // Create the helper text span
+        // Create the helper text span (unchanged)
         const helperSpan = document.createElement('span');
-        helperSpan.classList.add('text-xs', 'text-gray-500', 'ml-1');
-        helperSpan.textContent = '(salt, pepper, oil, sugar, etc.)'; // Shortened helper text
+        helperSpan.classList.add('text-xs', 'text-gray-600', 'ml-1'); // Darker Helper Text
+        helperSpan.textContent = '(salt, pepper, oil, sugar, etc.)'; 
 
-        // Append elements to the container
-        containerDiv.appendChild(pantryCheckbox);
-        containerDiv.appendChild(label);
+        // Append the toggle switch container, text label, and helper span to the main container div
+        containerDiv.appendChild(toggleLabelContainer);
+        containerDiv.appendChild(textLabel);
         containerDiv.appendChild(helperSpan);
 
-        // Insert the container into the DOM, specifically before the recipe results container
-        // Ensure resultsSection and recipeResultsContainer are defined in this scope
+        // Insert the container into the DOM (same logic as before)
         if (resultsSection && recipeResultsContainer) {
              resultsSection.insertBefore(containerDiv, recipeResultsContainer);
-             console.log("Pantry checkbox inserted into DOM.");
+             console.log("Pantry toggle inserted into DOM.");
         } else {
-             console.error("Could not find resultsSection or recipeResultsContainer to insert pantry checkbox.");
-             return; // Stop if containers aren't found
+             console.error("Could not find resultsSection or recipeResultsContainer to insert pantry toggle.");
+             return; 
         }
 
-        // Add the event listener to the newly created checkbox
+        // Add the event listener to the newly created hidden checkbox (same logic as before)
         pantryCheckbox.addEventListener('change', handlePantryCheckboxChange);
-        console.log("Event listener added to pantry checkbox.");
+        console.log("Event listener added to pantry toggle checkbox.");
 
-        // Check initial state based on common items currently displayed
+        // Check initial state (same logic as before)
         updatePantryCheckboxInitialState();
     }
 

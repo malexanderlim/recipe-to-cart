@@ -134,6 +134,11 @@ These issues directly impact the core value proposition or the demo user experie
     *   **(If needed) Action 3 (Simplify Structure):** Temporarily remove the SVG or the text span from the button HTML to see if either element alone renders correctly within the button's dimensions.
     *   **(If needed) Action 4 (Verify Tailwind Build):** Check `frontend/styles/output.css` to ensure the custom classes (`.h-46px`, `.px-18px`) are defined correctly.
     *   **Action 5 (Implement Fix):** Based on the findings, apply the necessary fix (e.g., remove conflicting CSS, adjust Tailwind classes, fix HTML structure). **(DONE - Removed conflicting rule from style.css)**
+*   **[X] Testing:** Verify the appearance and responsiveness across different screen sizes (basic check).
+*   **[X] Refine UI Copy:** 
+    *   [X] Section 1: Remove italics from instructions.
+    *   [X] Section 2: Remove parentheses and update wording for recipe card instructions.
+    *   [X] Section 3: Rephrase final list instructions for clarity and action.
 
 ---
 
@@ -155,14 +160,15 @@ These issues directly impact the core value proposition or the demo user experie
     *   **Overall Layout:** Apply Tailwind classes for container management, max-width, margins, padding, and background colors.
     *   **Typography:** Use Tailwind utilities for font sizes, weights, and colors for headings and body text.
     *   **Sections:** Style the main sections ("Add Recipes", "Review Extracted Ingredients", "Final Shopping List") using borders, padding, and background colors for clear visual separation.
-    *   **Form Elements:** Style the file input, URL input, and buttons using Tailwind classes for a consistent look and feel (including hover/focus states).
+    *   **[X] Form Elements:** Style the file input, URL input, and buttons using Tailwind classes for a consistent look and feel (including hover/focus states).
     *   **Recipe Cards:** Refactor the structure and apply Tailwind classes for borders, padding, spacing, and layout within each recipe card display.
     *   **[X]** Checkboxes/Toggles: Style the ingredient deselection checkboxes and pantry toggle.
     *   **[X]** Feedback Elements: Style loading indicators, success messages, and error messages using Tailwind utilities for colors, borders, and padding.
+    *   **[X]** Standardize Button Styles: Ensure the "Choose Files", "Add URL", and "Review Final List" buttons use a consistent dark blue style (`bg-blue-500`, `text-white`) and fully rounded shape (`rounded-full`) based on design feedback.
 *   **[X] Apply Targeted Styling Improvements (Prioritized):**
     *   **[X]** 1. Style Final Shopping List (Section 3): In `displayReviewList`, apply Tailwind classes to the `ul` and `li` elements, including checkboxes and labels, for better structure and visual consistency (`border`, `padding`, `spacing`, custom checkbox styles).
     *   **[X]** 2. Enhance Error/Loading Feedback:** Style global error/loading messages (e.g., for URL input, Instacart interactions). Add visual indicators (e.g., spinners) to individual recipe card loading states (`renderSingleRecipeResult`).
-    *   **[X]** 3. Refine Pantry Checkbox Area:** Style the helper text (`text-xs`, `text-gray-500`) and apply consistent Tailwind styling to the master pantry checkbox.
+    *   **[X]** 3. Refine Pantry Checkbox Area:** Style the helper text (`text-xs`, `text-gray-600`) and apply consistent Tailwind styling. Change the pantry checkbox to a visually lighter toggle switch/slider and darken label text (`text-black`, `text-gray-600`).
     *   **[X]** 4. Final Consistency Pass:** Review all sections for minor inconsistencies in padding, margins, font sizes, alignment, etc.
 *   **[ ] Cleanup:** Remove any existing custom CSS rules that are replaced by Tailwind utilities. (Deferred post-demo due to risk of breaking styles).
 *   **[X] Testing:** Verify the appearance and responsiveness across different screen sizes (basic check).

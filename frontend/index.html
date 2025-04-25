@@ -18,16 +18,16 @@
         <!-- Section 1: Add Recipes -->
         <section id="add-recipes-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
             <h2 class="text-2xl font-semibold mb-4 border-b pb-2">1. Add Recipes 🍝</h2>
-            <p class="clarification-text text-sm text-gray-600 mb-6">Add recipes by uploading images <strong class="font-semibold">and/or</strong> pasting URLs below:</p>
+            <p class="text-sm text-gray-600 mb-6">Add recipes by uploading images <strong class="font-semibold">and/or</strong> pasting URLs below:</p>
 
             <div class="input-method mb-6 p-4 border border-gray-200 rounded-md">
                 <h3 class="text-lg font-medium mb-3">Upload Recipe Image(s)</h3>
                 <input type="file" id="recipeImages" accept="image/*,.heic,.heif" multiple class="block w-full text-sm text-gray-500
                   file:mr-4 file:py-2 file:px-4
-                  file:rounded-md file:border-0
+                  file:rounded-full file:border-0
                   file:text-sm file:font-semibold
-                  file:bg-blue-50 file:text-blue-700
-                  hover:file:bg-blue-100 mb-2">
+                  file:bg-blue-500 file:text-white
+                  file:hover:bg-blue-600 mb-2">
                 <p class="helper-text text-xs text-gray-500">(Supports JPG, PNG, HEIC, etc. Select one or more files.)</p>
                 <div id="image-preview-area" class="mt-4"></div> <!-- Previews will appear here -->
             </div>
@@ -36,7 +36,7 @@
                 <h3 class="text-lg font-medium mb-3">Paste Recipe URL</h3>
                 <div class="url-input-container flex items-center gap-2">
                     <input type="url" id="recipeUrlInput" placeholder="Enter recipe web address (e.g., https://...)" class="flex-grow px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                    <button id="addUrlButton" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-md transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Add URL</button>
+                    <button id="addUrlButton" class="py-2 px-4 rounded-full border-0 text-sm font-semibold bg-blue-500 text-white hover:bg-blue-600 transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Add URL</button>
                 </div>
                 <p id="url-error-message" class="text-red-600 text-sm mt-1" style="display: none;"></p>
             </div>
@@ -45,7 +45,7 @@
         <!-- Section 2: Review Extracted Ingredients -->
         <section id="results-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
             <h2 class="text-2xl font-semibold mb-4 border-b pb-2">2. Review Extracted Ingredients 📝</h2>
-            <p class="helper-text text-sm text-gray-600 mb-4">(Adjust yield and uncheck items you already have before reviewing.)</p>
+            <p class="helper-text text-sm text-gray-600 mb-4">Adjust servings and uncheck items you already have before reviewing the final list.</p>
             <!-- Pantry checkbox added dynamically here -->
             <div id="recipe-results-container">
                 <!-- Recipe result cards will be injected here by script.js -->
@@ -63,7 +63,7 @@
 
             <!-- Consolidate Button - Logically leads to the next step -->
             <div class="action-area text-center mt-6">
-                 <button id="create-list-button" disabled class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">Review Final List</button>
+                 <button id="create-list-button" disabled class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Review Final List</button>
             </div>
         </section>
 
