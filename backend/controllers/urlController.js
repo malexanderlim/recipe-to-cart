@@ -1,32 +1,57 @@
 const crypto = require('crypto');
-// Dynamic import removed as fetch is no longer used here
-// const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+// Dynamic import to avoid adding node-fetch to globals in all envs
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { redis } = require('../services/redisService');
-const { Client } = require("@upstash/qstash"); // Import QStash Client
-
-// --- Initialize QStash Client (Copied from uploadController) ---
-if (!process.env.QSTASH_TOKEN) {
-    console.warn("QSTASH_TOKEN environment variable not set. QStash publishing will be disabled.");
-}
-const qstashClient = process.env.QSTASH_TOKEN ? new Client({ token: process.env.QSTASH_TOKEN }) : null;
-
-// Define the target QStash topic/URL for the URL worker
-// REMOVED: const URL_WORKER_QSTASH_TARGET_URL = process.env.QSTASH_URL_WORKER_URL;
-// REMOVED: if (!URL_WORKER_QSTASH_TARGET_URL && qstashClient) { ... }
 
 // --- Helper function to trigger background job --- 
-// This function is no longer needed as we use QStash directly
-/*
 async function triggerBackgroundJob(jobId) {
-    // ... old fetch logic ...
+    const port = process.env.PORT || 3001; 
+    const isVercel = process.env.VERCEL === '1';
+    
+    // Construct absolute URL for fetch
+    let triggerUrl;
+    if (isVercel) {
+        // Ensure VERCEL_URL starts with https://
+        const baseUrl = process.env.VERCEL_URL.startsWith('http') 
+            ? process.env.VERCEL_URL 
+            : `https://${process.env.VERCEL_URL}`;
+        triggerUrl = `${baseUrl}/api/process-url-job`;
+    } else {
+        triggerUrl = `http://localhost:${port}/api/process-url-job`;
+    }
+
+    console.log(`[${jobId}] Triggering background job at: ${triggerUrl}`);
+    
+    try {
+        // Fire-and-forget fetch
+        fetch(triggerUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                // Add internal trigger secret header if needed for security
+                // 'X-Internal-Trigger-Secret': process.env.INTERNAL_TRIGGER_SECRET || 'default-secret' 
+            },
+            body: JSON.stringify({ jobId }),
+        }).catch(fetchError => {
+            // Log the error but don't crash the main request
+            console.error(`[${jobId}] ASYNC CATCH: Error triggering background job (fetch failed):`, fetchError);
+            // Optionally: Update Redis status to failed here if trigger fails critically
+            // updateJobStatusRedis(jobId, 'failed', { error: `Failed to trigger background processing task: ${fetchError.message}` });
+        });
+        console.log(`[${jobId}] Background job fetch dispatched.`);
+    } catch (error) {
+        // This catch block might not be strictly necessary for fire-and-forget
+        // but kept for safety during refactor.
+        console.error(`[${jobId}] Error initiating background job fetch:`, error);
+        // Don't update status here as the initial request might succeed
+    }
 }
-*/
 
 // --- Controller function for POST /api/process-url --- 
 async function processUrl(req, res) {
     const { url } = req.body;
-    let jobId = `url-${crypto.randomUUID()}`;
-    console.log(`[${jobId}] Received request for /api/process-url (QStash)`);
+    let jobId = `url-${crypto.randomUUID()}`; 
+    console.log(`[${jobId}] Received request for /api/process-url`);
 
     if (!url) {
         console.log(`[${jobId}] Invalid request: URL is missing.`);
@@ -35,7 +60,6 @@ async function processUrl(req, res) {
 
     let validatedUrl;
     try {
-        // Basic URL validation (consider using a library like 'validator')
         validatedUrl = new URL(url);
         if (!['http:', 'https:'].includes(validatedUrl.protocol)) {
              throw new Error('URL must use http or https protocol');
@@ -52,73 +76,28 @@ async function processUrl(req, res) {
         sourceType: 'url' // Differentiate from image jobs
     };
 
-    let redisKeySet = false;
-
     try {
         // Use Redis client
-        if (!redis) {
-            throw new Error('Redis client not available in urlController');
+        if (!redis) { 
+            throw new Error('Redis client not available in urlController'); 
         }
-
+        
         console.log(`[${jobId}] Step 1: Attempting redis.set...`);
-        await redis.set(jobId, JSON.stringify(jobData), { ex: 86400 });
-        redisKeySet = true;
+        // Store as stringified JSON, set expiration (e.g., 24 hours)
+        await redis.set(jobId, JSON.stringify(jobData), { ex: 86400 }); 
         console.log(`[${jobId}] Step 2: Initial job data set in Redis for URL: ${url}`);
 
-        // --- Publish job to QStash --- 
-        if (!qstashClient) {
-            throw new Error("QStash client not initialized. Cannot trigger background job.");
-        }
+        // Trigger background job (fire-and-forget)
+        await triggerBackgroundJob(jobId);
 
-        // --- Dynamically Construct Target URL --- 
-        let targetWorkerUrl;
-        const isVercel = process.env.VERCEL === '1';
-        const workerPath = '/api/process-url-job-worker'; // Correct worker path
-        if (isVercel && process.env.VERCEL_URL) {
-            targetWorkerUrl = `https://${process.env.VERCEL_URL}${workerPath}`;
-        } else if (!isVercel) {
-            const host = req.get('host');
-            const protocol = req.protocol;
-            if (host && protocol) {
-                 targetWorkerUrl = `${protocol}://${host}${workerPath}`;
-            } else {
-                 throw new Error("Could not determine host/protocol for local worker URL.");
-            }
-        } else {
-            throw new Error("VERCEL_URL environment variable is missing in Vercel environment.");
-        }
-        // -----------------------------------------
-
-        console.log(`[${jobId}] Step 3: Publishing job to QStash target: ${targetWorkerUrl}`);
-        const publishResponse = await qstashClient.publishJSON({
-            url: targetWorkerUrl, // Use dynamically constructed URL
-            body: { jobId: jobId },
-        });
-        console.log(`[${jobId}] QStash publish response: ${publishResponse.messageId}`);
-
-        // --- Send Response --- 
-        console.log(`[${jobId}] Step 4: Attempting to send 202 response...`);
+        console.log(`[${jobId}] Step 3: Attempting to send 202 response...`);
         res.status(202).json({ jobId });
-        console.log(`[${jobId}] Step 5: Successfully sent 202 response.`);
+        console.log(`[${jobId}] Step 4: Successfully sent 202 response.`);
 
-    } catch (error) {
-        console.error(`[${jobId}] Error in /api/process-url handler (QStash):`, error);
-        
-        // Cleanup logic similar to uploadController
-        if (redisKeySet) {
-             try {
-                 await redis.set(jobId, JSON.stringify({ 
-                     ...jobData, // Keep initial data like inputUrl
-                     status: 'failed', 
-                     error: 'Failed to schedule background processing. Please try again.'
-                 }));
-                 console.log(`[${jobId}] Updated Redis to failed due to setup/publish error.`);
-             } catch (redisSetError) {
-                 console.error(`[${jobId}] Failed to update Redis status to failed on error:`, redisSetError);
-                 try { await redis.del(jobId); } catch (redisDelError) { /* Ignore */ }
-             }
-         } 
-
+    } catch (error) { 
+        console.error(`[${jobId}] SYNC CATCH: Error in /api/process-url handler:`, error);
+        // Attempt to clean up Redis if the initial set succeeded but something else failed?
+        // Potentially: await redis.del(jobId);
         if (!res.headersSent) {
              console.log(`[${jobId}] Sending 500 error response to client.`);
              res.status(500).json({ error: 'Failed to initiate URL processing job' });
