@@ -62,6 +62,36 @@ These issues directly impact the core value proposition or the demo user experie
     *   Backend Action: `/api/create-list` returns adjusted list with `line_item_measurements`. `/api/send-to-instacart` accepts this structure. **(DONE)**
     *   Frontend Action: UI displays primary measurement, stores full data, handles correct submission. **(DONE)**
 *   **[X] Implement Asynchronous Image Processing:** Solved Vercel timeout issues using Vercel Blob, KV (Redis), and chained background functions (`/api/upload` -> `/api/process-image` -> `/api/process-text`).
+*   **[ ] Improve Initial Job Trigger Reliability (P0 - End-to-End QStash):**
+    *   **Problem:** The initial async triggers from `/api/upload` (for images) and `/api/process-url` (for URLs) use "fire-and-forget" `fetch` calls. These lack guaranteed delivery and retry mechanisms, leading to jobs getting stuck in the `pending` state if the background function fails to start (e.g., due to cold starts or transient issues).
+    *   **Goal:** Replace the initial `fetch` triggers with QStash publishing for guaranteed delivery, retries, and consistency with the rest of the async workflow.
+    *   **Solution: Extend QStash to Initial Triggers:**
+        *   **[ ] Dependencies:** Verify `@upstash/qstash` is installed (should be).
+        *   **[ ] Backend Routing:** Define new API routes for `/api/process-image-worker` and `/api/process-url-job-worker` (e.g., in `backend/routes/`).
+        *   **[ ] New Controller (`processImageWorkerController.js`):** Create `backend/controllers/processImageWorkerController.js`.
+        *   **[ ] New Controller (`urlJobWorkerController.js`):** Create `backend/controllers/urlJobWorkerController.js`.
+        *   **[ ] Refactor `/api/upload` Trigger:** Modify the controller for `/api/upload` to:
+            *   Upload image to Blob, create initial KV record (`pending`).
+            *   Publish a job to a *new* QStash topic (e.g., `image-processing-jobs`) with the `jobId`. The target URL for this topic will be `/api/process-image-worker`.
+            *   Remove the old `fetch` call to `/api/process-image`.
+        *   **[ ] Refactor `/api/process-url` Trigger:** Modify the controller for `/api/process-url` to:
+            *   Create initial KV record (`pending`).
+            *   Publish a job to a *new* QStash topic (e.g., `url-processing-jobs`) with the `jobId`. The target URL for this topic will be `/api/process-url-job-worker`.
+            *   Remove the old `fetch` call to `/api/process-url-job`.
+        *   **[ ] Implement Image Worker Logic (`processImageWorkerController.js`):**
+            *   Add QStash signature verification middleware (`Receiver.verify()`).
+            *   Move core logic from *old* `/api/process-image` (fetch KV, download blob, call Vision).
+            *   Implement robust `try...catch` to update KV status to `failed` on error.
+            *   On successful Vision call, update KV status (`vision_completed`) AND publish the *next* job to the *existing* QStash topic for the text processing worker (`/api/process-text-worker`).
+        *   **[ ] Implement URL Worker Logic (`urlJobWorkerController.js`):**
+            *   Add QStash signature verification middleware (`Receiver.verify()`).
+            *   Move core logic from *old* `/api/process-url-job` (fetch KV, scrape URL, maybe LLM, update KV with `completed` or `failed`).
+            *   Implement robust `try...catch` to update KV status to `failed` on error.
+        *   **[ ] Upstash Configuration:** Configure the new QStash topics (`image-processing-jobs`, `url-processing-jobs`) and their corresponding target URLs (`/api/process-image-worker`, `/api/process-url-job-worker`) in the Upstash console. Set appropriate retry policies. **(Switched to dynamic URL construction, config not needed in this way)**
+        *   **[ ] Testing (Image):** Verify the end-to-end image flow: Upload -> `/api/upload` -> QStash -> `/api/process-image-worker` -> QStash -> `/api/process-text-worker` -> Final Redis update -> Frontend poll success. Test error handling within the image worker.
+        *   **[ ] Testing (URL):** Verify the end-to-end URL flow: Submit URL -> `/api/process-url` -> QStash -> `/api/process-url-job-worker` -> Final Redis update -> Frontend poll success. Test error handling within the URL worker.
+        *   **[ ] Cleanup (Post-Testing):** Remove the old, now unused routes and controllers associated with `/api/process-image` and `/api/process-url-job` (`processImageController.js`, `urlJobController.js`, `processImageRoutes.js`, `urlJobRoutes.js`).
+        *   **[ ] Documentation:** Update `PROJECT_OVERVIEW.md` data flow diagram and descriptions.
 *   **[ ] Address Stuck Processing (`vision_completed` state):** (Superseded by QStash migration for the trigger failure aspect. UX improvement for handling timeouts still relevant).
     *   **Problem:** Occasionally, jobs get stuck in the `vision_completed` status and never proceed to the `/api/process-text` step (Anthropic analysis) or time out gracefully. The frontend polling eventually shows a generic timeout error, but the root cause seems to be the silent failure of the trigger between the two background functions.
     *   **Investigation (DONE):** Added detailed logging. Confirmed that the `fetch` from `/api/process-image` to `/api/process-text` sometimes dispatches successfully but fails to invoke the target function *without* triggering the `.catch()` block. The job remains `vision_completed` in Redis.

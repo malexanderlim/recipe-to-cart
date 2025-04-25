@@ -20,26 +20,30 @@ const upload = multer({ storage: storage });
 
 // --- Route Imports ---
 const uploadRoutes = require('./routes/uploadRoutes');
-const processImageRoutes = require('./routes/processImageRoutes');
+// const processImageRoutes = require('./routes/processImageRoutes'); // Old route to be removed
 // const processTextRoutes = require('./routes/processTextRoutes'); // Remove old route
-const processTextWorkerRoutes = require('./routes/processTextWorkerRoutes'); // Import new worker route
+const processTextWorkerRoutes = require('./routes/processTextWorkerRoutes'); // Existing text worker route
 const urlRoutes = require('./routes/urlRoutes');
-const urlJobRoutes = require('./routes/urlJobRoutes');
+// const urlJobRoutes = require('./routes/urlJobRoutes'); // Old route to be removed
 const jobStatusRoutes = require('./routes/jobStatusRoutes');
 const listRoutes = require('./routes/listRoutes');
 const instacartRoutes = require('./routes/instacartRoutes');
+const processImageWorkerRoutes = require('./routes/processImageWorkerRoutes'); // New image worker
+const urlJobWorkerRoutes = require('./routes/urlJobWorkerRoutes'); // New url worker
 
 // --- API Routes --- 
 // Apply the upload middleware specifically to the upload route
-app.use('/api/upload', uploadRoutes);
-app.use('/api/process-image', processImageRoutes);
+app.use('/api/upload', uploadRoutes); 
+// app.use('/api/process-image', processImageRoutes); // Remove old route mounting
 // app.use('/api/process-text', processTextRoutes); // Remove old route mounting
-app.use('/api/process-text-worker', processTextWorkerRoutes); // Mount new worker route
+app.use('/api/process-text-worker', processTextWorkerRoutes); // Mount existing text worker route
 app.use('/api/process-url', urlRoutes);
-app.use('/api/process-url-job', urlJobRoutes);
+// app.use('/api/process-url-job', urlJobRoutes); // Remove old route mounting
 app.use('/api/job-status', jobStatusRoutes);
 app.use('/api/create-list', listRoutes);
 app.use('/api/send-to-instacart', instacartRoutes);
+app.use('/api/process-image-worker', processImageWorkerRoutes); // Mount new image worker
+app.use('/api/process-url-job-worker', urlJobWorkerRoutes); // Mount new url worker
 
 // --- Basic Root Route --- 
 app.get('/', (req, res) => {
