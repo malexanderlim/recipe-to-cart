@@ -491,16 +491,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderParsedIngredientsHTML(recipeData) {
         let html = `<h5 class="text-base font-medium text-gray-600 mb-2">Parsed Ingredients:</h5>`; 
         html += '<ul class="ingredients-list space-y-1">'; 
-        // *** ADD DEBUG LOG ***
-        console.log(`[renderParsedIngredientsHTML for ${recipeData.id}] Ingredients data received:`, JSON.stringify(recipeData.ingredients));
-        // *********************
         recipeData.ingredients.forEach((item, index) => {
             const isChecked = true; // Default to checked in the HTML string
 
-            // FIX: Use item.raw which contains the full ingredient string
-            // const ingredientText = `${item.quantity || ''} ${item.unit || ''} ${item.ingredient || ''}`.trim();
-            const ingredientText = item.raw || 'Invalid Ingredient Data'; // Use raw string
-
+            const ingredientText = `${item.quantity || ''} ${item.unit || ''} ${item.ingredient || ''}`.trim();
             const uniqueId = `ingredient-${recipeData.id}-${index}`;
             html += `
                 <li class="flex items-center">
@@ -590,8 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         hasCheckedIngredients = true;
                         return {
-                            // REVERT: Use item.ingredient for backend payload as before
-                            ingredient: item.ingredient || 'Unknown Ingredient', // Use item.ingredient
+                            ingredient: item.ingredient || 'Unknown Ingredient',
                             quantity: finalQuantity,
                             unit: item.unit // Keep original unit (or null) for backend processing
                         };

@@ -155,39 +155,40 @@ const processUrlJobWorker = async (req, res) => {
                         else if (Array.isArray(rawYield) && rawYield.length) parsedYield = parseYieldString(String(rawYield[0]));
                     }
 
-                    // *** Call LLM to parse ingredient strings (like old code) ***
-                    console.log(`[Worker - URL Job ${jobId}] Parsing ${ingredientStrings.length} ingredients from JSON-LD via LLM...`);
-                    await updateUrlJobStatus(jobId, 'llm_parsing_ingredients'); 
-                    const sysPrompt = 'You are an expert ingredient parser. Convert raw ingredient strings into a JSON array of objects [{quantity, unit, ingredient}]. Use null for missing fields. Respond ONLY with that JSON.';
+                    // --- Reintroduce LLM call for JSON-LD ingredients --- 
+                    console.log(`[Worker - URL Job ${jobId}] Found ${ingredientStrings.length} ingredients via JSON-LD. Parsing with LLM...`);
+                    await updateUrlJobStatus(jobId, 'llm_parsing_jsonld_ingredients'); 
+                    const sysPrompt = 'You are an expert ingredient parser... Respond ONLY with JSON array.'; // Use appropriate prompt
                     const userPrompt = 'Ingredient List:\n' + ingredientStrings.map((s) => `- ${s}`).join('\n');
-                    const llmResp = await callAnthropic(sysPrompt, userPrompt);
-                    const parsedIngredients = await parseAndCorrectJson(jobId, llmResp, 'array');
+                    
+                    const llmResp = await callAnthropic(sysPrompt, userPrompt); // Use appropriate settings
+                    const parsedIngredients = await parseAndCorrectJson(llmResp, 'array'); // Use jsonUtils
 
                     if (parsedIngredients && parsedIngredients.length) {
-                        // Ensure correct keys and add the RAW string back
-                        const finalIngredients = ingredientStrings.map((rawStr, index) => {
-                            const parsedItem = parsedIngredients[index] || {};
-                            return {
-                                raw: rawStr, // Keep the original raw string
-                                quantity: parsedItem.quantity ?? null,
-                                unit: parsedItem.unit ?? null,
-                                ingredient: parsedItem.ingredient || parsedItem.name, // LLM might use name
-                                source: 'json-ld+llm' // Indicate source
-                            };
-                        });
+                        const cleanIngredients = parsedIngredients
+                            .filter(o => o && typeof o === 'object' && (o.name || o.ingredient)) // Similar filter as old controller
+                            .map(o => ({ 
+                                quantity: o.quantity ?? null, 
+                                unit: o.unit ?? null, 
+                                ingredient: o.ingredient || o.name // Prefer ingredient, fallback name
+                             }));
 
-                        recipeResult = { 
-                            title, 
-                            yield: parsedYield, 
-                            ingredients: finalIngredients, 
-                            sourceUrl: finalUrl, 
-                            extractedVia: 'json-ld+llm' 
-                        };
-                        console.log(`[Worker - URL Job ${jobId}] Extracted recipe via JSON-LD + LLM parsing.`);
+                        if (cleanIngredients.length) {
+                            recipeResult = { 
+                                title, 
+                                yield: parsedYield, 
+                                ingredients: cleanIngredients, 
+                                sourceUrl: finalUrl, 
+                                extractedVia: 'json-ld+llm' // Indicate LLM was used
+                            };
+                            console.log(`[Worker - URL Job ${jobId}] Parsed ${cleanIngredients.length} ingredients from JSON-LD via LLM.`);
+                        } else {
+                            console.warn(`[Worker - URL Job ${jobId}] LLM parsing of JSON-LD ingredients yielded no valid items.`);
+                        }
                     } else {
-                         console.warn(`[Worker - URL Job ${jobId}] LLM failed to parse ingredients from JSON-LD strings.`);
-                         // Fall through to Readability fallback
+                        console.warn(`[Worker - URL Job ${jobId}] LLM failed to parse ingredients from JSON-LD strings.`);
                     }
+                     // --- End LLM Call --- 
                 } else {
                      console.log(`[Worker - URL Job ${jobId}] JSON-LD found, but recipeIngredient was empty.`);
                 }
@@ -195,7 +196,7 @@ const processUrlJobWorker = async (req, res) => {
                 console.log(`[Worker - URL Job ${jobId}] No usable JSON-LD recipe found.`);
             }
         } catch (jsonLdError) {
-            console.warn(`[Worker - URL Job ${jobId}] Error during JSON-LD processing phase:`, jsonLdError.message);
+            console.warn(`[Worker - URL Job ${jobId}] Error during JSON-LD processing:`, jsonLdError.message);
             // Proceed to fallback
         }
 
@@ -208,48 +209,24 @@ const processUrlJobWorker = async (req, res) => {
                 const article = reader.parse();
 
                 if (article && article.textContent) {
-                    console.log(`[Worker - URL Job ${jobId}] Readability extracted content. Length: ${article.textContent.length}. Calling LLM for full parse...`);
-                    // *** Update LLM Prompt to return structure AND raw strings ***
-                    const llmPrompt = `Extract the recipe title, yield object { quantity, unit }, and a JSON array of ingredients from the following text. Each ingredient object MUST have keys "raw" (the original string), "quantity", "unit", and "ingredient" (the parsed name). Use null for missing quantity/unit/ingredient. Respond ONLY with a single valid JSON object with top-level keys "title", "yield", and "ingredients".
-
-TEXT:
-${article.textContent.substring(0, 15000)}`; // Limit context size
+                    console.log(`[Worker - URL Job ${jobId}] Readability extracted content. Length: ${article.textContent.length}. Calling LLM...`);
+                    const llmPrompt = `Extract the recipe title, yield (as quantity and unit, e.g., "4 servings", "1 loaf"), and ingredients (each as a string in an array) from the following text. Only return a JSON object with keys "title", "yield_string", "ingredients".\n\nTEXT:\n${article.textContent.substring(0, 15000)}`; // Limit context size
                     
-                    await updateUrlJobStatus(jobId, 'llm_parsing_fallback'); 
-                    const llmResponse = await callAnthropic(llmPrompt, 0.5);
-                    const parsedLlmJson = parseAndCorrectJson(jobId, llmResponse, 'object');
+                    const llmResponse = await callAnthropic(llmPrompt, 0.5); // Use imported helper
+                    const parsedLlmJson = parseAndCorrectJson(llmResponse);
 
                     if (parsedLlmJson?.ingredients?.length > 0) {
-                         // *** Map LLM response, ensuring 'raw' exists ***
-                         const finalIngredients = parsedLlmJson.ingredients
-                            .filter(o => o && typeof o === 'object' && o.raw) // Require raw string
-                            .map(o => ({
-                                raw: o.raw,
-                                quantity: o.quantity ?? null,
-                                unit: o.unit ?? null,
-                                ingredient: o.ingredient || o.name, // Allow for name as fallback
-                                source: 'fallback-llm'
-                            }));
-
-                         if (!finalIngredients.length) {
-                             throw new Error("LLM fallback returned ingredients but none had a 'raw' string.");
-                         }
-                         
-                         // Parse yield from fallback response
-                         const y = parsedLlmJson.yield && typeof parsedLlmJson.yield === 'object'
-                                ? { quantity: parsedLlmJson.yield.quantity ?? null, unit: parsedLlmJson.yield.unit ?? null }
-                                : null;
-
+                         const ingredients = parsedLlmJson.ingredients.map(ing => ({ raw: ing, source: 'llm' }));
                          recipeResult = {
                             title: parsedLlmJson.title || article.title || 'Recipe from URL',
-                            yield: y,
-                            ingredients: finalIngredients,
+                            yield: parseYieldString(parsedLlmJson.yield_string),
+                            ingredients: ingredients,
                             sourceUrl: finalUrl,
                             extractedVia: 'fallback-llm'
                          };
                          console.log(`[Worker - URL Job ${jobId}] Extracted recipe via Readability + LLM.`);
                     } else {
-                        console.warn(`[Worker - URL Job ${jobId}] LLM fallback did not return usable ingredients array.`);
+                        console.warn(`[Worker - URL Job ${jobId}] LLM fallback did not return usable ingredients.`);
                         throw new Error("Fallback extraction via LLM failed to find ingredients.")
                     }
                 } else {
