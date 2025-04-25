@@ -53,7 +53,7 @@ async function handleUpload(req, res) {
         const blobUrl = blobResult.url;
         console.log(`[Async Upload Job ${jobId}] Image uploaded to: ${blobUrl}`);
 
-        // 2. Store initial job state in Upstash Redis (including baseUrl)
+        // 2. Store initial job state in Upstash Redis (baseUrl no longer needed here for trigger)
         console.log(`[Async Upload Job ${jobId}] Storing initial job state in Redis...`);
         if (!redis) { throw new Error('Redis client not initialized'); }
         if (!qstashClient) { throw new Error('QStash client not initialized'); }
@@ -62,34 +62,35 @@ async function handleUpload(req, res) {
             originalFilename: originalFilename,
             blobUrl: blobUrl,
             createdAt: Date.now(),
-            baseUrl: baseUrl // Store the determined base URL
+            // baseUrl: baseUrl // No longer need to store baseUrl for this trigger
         };
         await redis.set(jobId, JSON.stringify(initialJobData), { ex: 86400 });
-        console.log(`[Async Upload Job ${jobId}] Initial job state stored (including base URL).`);
+        console.log(`[Async Upload Job ${jobId}] Initial job state stored.`);
 
-        // 3. Trigger background processing via QStash (using dynamic URL)
-        const imageWorkerUrl = `${baseUrl}/api/process-image-worker`; // Construct dynamically
+        // 3. Trigger background processing via QStash Enqueue
+        const imageQueueName = 'image-processing-jobs'; // Use queue name
 
-        console.log(`[Async Upload Job ${jobId}] Publishing job to QStash queue targeting dynamically constructed URL: ${imageWorkerUrl}`);
+        console.log(`[Async Upload Job ${jobId}] Enqueuing job to QStash queue: ${imageQueueName}`);
 
         try {
-            await qstashClient.publishJSON({
-                url: imageWorkerUrl, // Use dynamically constructed URL
+            await qstashClient.enqueueJSON({
+                // url: imageWorkerUrl, // REMOVED
+                queue: imageQueueName, // Use queue name
                 body: { jobId: jobId },
-                retries: 5,
-                delay: '1s'
+                retries: 3, // Use plan limit (max 3)
+                // delay: '1s' // Delay might be less common/useful with enqueue, removing for now
             });
-            console.log(`[Async Upload Job ${jobId}] Job published successfully to QStash.`);
+            console.log(`[Async Upload Job ${jobId}] Job enqueued successfully to QStash.`);
         } catch (qstashError) {
-            console.error(`[Async Upload Job ${jobId}] CRITICAL: Error publishing job to QStash:`, qstashError);
-            const publishFailData = {
-                ...initialJobData, // Use the data we just stored
+            console.error(`[Async Upload Job ${jobId}] CRITICAL: Error enqueuing job to QStash:`, qstashError);
+            const enqueueFailData = {
+                ...initialJobData,
                 status: 'failed',
-                error: 'Failed to queue job for processing via QStash. Please try again.',
+                error: 'Failed to queue job for processing via QStash queue. Please try again.',
                 finishedAt: Date.now()
              };
-             await redis.set(jobId, JSON.stringify(publishFailData));
-             console.log(`[Async Upload Job ${jobId}] Updated Redis status to failed due to QStash publish error.`);
+             await redis.set(jobId, JSON.stringify(enqueueFailData));
+             console.log(`[Async Upload Job ${jobId}] Updated Redis status to failed due to QStash enqueue error.`);
              return res.status(202).json({ jobId: jobId }); // Still return 202
         }
 

@@ -17,22 +17,17 @@ async function handleProcessImageJob(req, res) {
     let jobData; // For storing retrieved job data
 
     try {
-        // 1. Retrieve job details (blobUrl, baseUrl) from Redis
+        // 1. Retrieve job details from Redis (baseUrl no longer needed)
         console.log(`[Process Image Worker Job ${jobId}] Retrieving job data from Redis...`);
         if (!redis) { throw new Error('Redis client not initialized'); }
         const jobDataStr = await redis.get(jobId);
         if (!jobDataStr) {
             console.error(`[Process Image Worker Job ${jobId}] Job data not found in Redis.`);
-            return res.status(404).send('Not Found: Job data missing'); // Don't retry
+            return res.status(404).send('Not Found: Job data missing');
         }
         jobData = JSON.parse(jobDataStr);
-        const { blobUrl, originalFilename, baseUrl } = jobData;
-
-        if (!baseUrl) {
-            // If baseUrl wasn't stored for some reason, we can't proceed reliably
-            console.error(`[Process Image Worker Job ${jobId}] CRITICAL: baseUrl missing from job data in Redis.`);
-            throw new Error('Configuration error: baseUrl missing from job data.');
-        }
+        // Remove baseUrl retrieval, it's not needed for enqueueing the next step
+        const { blobUrl, originalFilename /*, baseUrl */ } = jobData;
 
         // Check if job is already processed or failed
         if (jobData.status !== 'pending') {
@@ -117,10 +112,10 @@ async function handleProcessImageJob(req, res) {
         }
         console.log(`[Process Image Worker Job ${jobId}] Text validation passed.`);
 
-        // 6. On Vision Success: Update Redis & Trigger Next Step (Text Processing Worker) via QStash
-        console.log(`[Process Image Worker Job ${jobId}] Vision successful. Updating Redis and triggering text processor...`);
+        // 6. On Vision Success: Update Redis & Trigger Next Step (Text Processing Worker) via QStash Enqueue
+        console.log(`[Process Image Worker Job ${jobId}] Vision successful. Updating Redis and triggering text processor queue...`);
         const visionCompleteData = {
-            ...jobData,
+            ...jobData, // Keep original data (baseUrl might still be there, that's okay)
             status: 'vision_completed',
             extractedText: extractedText,
             visionFinishedAt: Date.now()
@@ -128,39 +123,38 @@ async function handleProcessImageJob(req, res) {
         await redis.set(jobId, JSON.stringify(visionCompleteData));
         console.log(`[Process Image Worker Job ${jobId}] Redis status updated to vision_completed.`);
 
-        // Trigger the next worker (/api/process-text-worker) using dynamic URL
-        const textWorkerUrl = `${baseUrl}/api/process-text-worker`; // Construct dynamically
+        // Trigger the next worker via Queue
+        const textQueueName = 'text-processing-jobs'; // Use queue name
 
         if (!qstashClient) {
             throw new Error('QStash client not initialized');
         }
 
-        console.log(`[Process Image Worker Job ${jobId}] Publishing job to QStash text worker queue targeting dynamically constructed URL: ${textWorkerUrl}`);
+        console.log(`[Process Image Worker Job ${jobId}] Enqueuing job to QStash queue: ${textQueueName}`);
         try {
-            await qstashClient.publishJSON({
-                url: textWorkerUrl, // Use dynamically constructed URL
+            await qstashClient.enqueueJSON({
+                // url: textWorkerUrl, // REMOVED
+                queue: textQueueName, // Use queue name
                 body: { jobId: jobId },
                 retries: 3
             });
-            console.log(`[Process Image Worker Job ${jobId}] Job published successfully to QStash text worker.`);
+            console.log(`[Process Image Worker Job ${jobId}] Job enqueued successfully to QStash text worker queue.`);
         } catch (qstashError) {
-            console.error(`[Process Image Worker Job ${jobId}] CRITICAL: Error publishing job to QStash text worker:`, qstashError);
-            // If trigger fails, update Redis status to reflect the failure
+            console.error(`[Process Image Worker Job ${jobId}] CRITICAL: Error enqueuing job to QStash text worker queue:`, qstashError);
             const triggerFailData = {
-                ...visionCompleteData, // Start with the data we *had* before trigger failure
+                ...visionCompleteData,
                 status: 'failed',
-                error: `Processing Error: Failed to trigger the text analysis step. Reason: ${qstashError.message}`,
+                error: `Processing Error: Failed to enqueue the text analysis step via queue. Reason: ${qstashError.message}`,
                 finishedAt: Date.now()
             };
-            await redis.set(jobId, JSON.stringify(triggerFailData)); // Update redis
-            console.log(`[Process Image Worker Job ${jobId}] Updated Redis status to failed due to QStash trigger error.`);
-            // Rethrow the error to be caught by the main catch block -> respond 500 to QStash
+            await redis.set(jobId, JSON.stringify(triggerFailData));
+            console.log(`[Process Image Worker Job ${jobId}] Updated Redis status to failed due to QStash enqueue error.`);
             throw qstashError;
         }
 
         // 7. Return 200 OK to QStash
-        console.log(`[Process Image Worker Job ${jobId}] Job processed successfully, triggered next step.`);
-        res.status(200).send('OK: Image processed, text analysis triggered');
+        console.log(`[Process Image Worker Job ${jobId}] Job processed successfully, enqueued next step.`);
+        res.status(200).send('OK: Image processed, text analysis job enqueued');
 
     } catch (error) {
         console.error(`[Process Image Worker Job ${jobId}] Error processing job:`, error);

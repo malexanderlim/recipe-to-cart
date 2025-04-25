@@ -27,18 +27,13 @@ async function processUrl(req, res) {
     }
 
     try {
-        // --- Determine Base URL ---
-        const isVercel = process.env.VERCEL === '1';
-        let baseUrl;
-        if (isVercel && process.env.VERCEL_URL) {
-            baseUrl = process.env.VERCEL_URL.startsWith('http') ? process.env.VERCEL_URL : `https://${process.env.VERCEL_URL}`;
-        } else {
-            baseUrl = `${req.protocol}://${req.get('host')}`;
-        }
-        console.log(`[${jobId}] Determined base URL: ${baseUrl}`);
-        // --------------------------
+        // --- REMOVE Base URL Determination ---
+        // const isVercel = ...
+        // let baseUrl = ...
+        // console.log(`[${jobId}] Determined base URL: ${baseUrl}`);
+        // -----------------------------------
 
-        // 1. Store initial job data in Redis (including baseUrl)
+        // 1. Store initial job data in Redis (baseUrl no longer needed here)
         if (!redis) { throw new Error('Redis client not available'); }
         if (!qstashClient) { throw new Error('QStash client not initialized'); }
 
@@ -46,35 +41,36 @@ async function processUrl(req, res) {
             status: 'pending',
             inputUrl: url,
             startTime: Date.now(),
-            sourceType: 'url',
-            baseUrl: baseUrl // Store the determined base URL
+            sourceType: 'url'
+            // baseUrl: baseUrl // No longer storing baseUrl
         };
 
         console.log(`[${jobId}] Storing initial job data in Redis for URL: ${url}`);
         await redis.set(jobId, JSON.stringify(jobData), { ex: 86400 });
-        console.log(`[${jobId}] Initial job data stored in Redis (including base URL).`);
+        console.log(`[${jobId}] Initial job data stored in Redis.`);
 
-        // 2. Trigger background job via QStash (using dynamic URL)
-        const urlWorkerUrl = `${baseUrl}/api/process-url-job-worker`; // Construct dynamically
+        // 2. Trigger background job via QStash Enqueue
+        const urlQueueName = 'url-processing-jobs'; // Use queue name
 
-        console.log(`[${jobId}] Publishing job to QStash URL worker queue targeting dynamically constructed URL: ${urlWorkerUrl}`);
+        console.log(`[${jobId}] Enqueuing job to QStash queue: ${urlQueueName}`);
         try {
-            await qstashClient.publishJSON({
-                url: urlWorkerUrl, // Use dynamically constructed URL
+            await qstashClient.enqueueJSON({
+                // url: urlWorkerUrl, // REMOVED
+                queue: urlQueueName, // Use queue name
                 body: { jobId: jobId },
-                retries: 5,
+                retries: 3, // Use plan limit (max 3)
             });
-            console.log(`[${jobId}] Job published successfully to QStash URL worker.`);
+            console.log(`[${jobId}] Job enqueued successfully to QStash URL worker queue.`);
         } catch (qstashError) {
-            console.error(`[${jobId}] CRITICAL: Error publishing job to QStash URL worker:`, qstashError);
-            const publishFailData = {
+            console.error(`[${jobId}] CRITICAL: Error enqueuing job to QStash URL worker queue:`, qstashError);
+            const enqueueFailData = {
                  ...jobData, // Use the data we just stored
                  status: 'failed',
-                 error: 'Failed to queue URL job for processing via QStash. Please try again.',
+                 error: 'Failed to queue URL job for processing via QStash queue. Please try again.',
                  finishedAt: Date.now()
              };
-             await redis.set(jobId, JSON.stringify(publishFailData));
-             console.log(`[${jobId}] Updated Redis status to failed due to QStash publish error.`);
+             await redis.set(jobId, JSON.stringify(enqueueFailData));
+             console.log(`[${jobId}] Updated Redis status to failed due to QStash enqueue error.`);
              return res.status(202).json({ jobId: jobId }); // Still return 202
         }
 
