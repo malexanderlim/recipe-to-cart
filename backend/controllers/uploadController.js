@@ -4,7 +4,7 @@
 // ----------------------------------------------------------------------------
 
 const crypto = require('crypto');
-const { upload: VercelBlobUpload } = require('@vercel/blob');
+const { put } = require('@vercel/blob');
 const { redis } = require('../services/redisService');
 const { Client } = require('@upstash/qstash'); // Import QStash Client
 
@@ -34,11 +34,11 @@ async function handleUpload(req, res) {
     try {
         // 1. Upload image buffer to Vercel Blob
         console.log(`[Async Upload Job ${jobId}] Uploading image to Vercel Blob...`);
-        const blob = await VercelBlobUpload(originalFilename, buffer, {
+        const blobResult = await put(`${jobId}-${originalFilename}`, buffer, {
             access: 'public',
             token: process.env.BLOB_READ_WRITE_TOKEN
         });
-        const blobUrl = blob.url;
+        const blobUrl = blobResult.url;
         console.log(`[Async Upload Job ${jobId}] Image uploaded to: ${blobUrl}`);
 
         // 2. Store initial job state in Upstash Redis
