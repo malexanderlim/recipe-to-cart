@@ -4,8 +4,12 @@
 // ----------------------------------------------------------------------------
 
 const crypto = require('crypto');
-const { put } = require('@vercel/blob');
+const { upload: VercelBlobUpload } = require('@vercel/blob');
 const { redis } = require('../services/redisService');
+const { Client } = require('@upstash/qstash'); // Import QStash Client
+
+// Initialize QStash Client
+const qstashClient = new Client({ token: process.env.QSTASH_TOKEN });
 
 /**
  * Handle image upload and initiate asynchronous processing
@@ -30,11 +34,11 @@ async function handleUpload(req, res) {
     try {
         // 1. Upload image buffer to Vercel Blob
         console.log(`[Async Upload Job ${jobId}] Uploading image to Vercel Blob...`);
-        const blobResult = await put(originalFilename, buffer, {
+        const blob = await VercelBlobUpload(originalFilename, buffer, {
             access: 'public',
-            addRandomSuffix: true
+            token: process.env.BLOB_READ_WRITE_TOKEN
         });
-        const blobUrl = blobResult.url;
+        const blobUrl = blob.url;
         console.log(`[Async Upload Job ${jobId}] Image uploaded to: ${blobUrl}`);
 
         // 2. Store initial job state in Upstash Redis
@@ -53,40 +57,31 @@ async function handleUpload(req, res) {
         // Construct the absolute URL for the API endpoint
         // IMPORTANT: Use VERCEL_URL or similar for production, fallback for local
         const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `${req.protocol}://${req.get('host')}`;
-        const triggerSecretToSend = process.env.INTERNAL_TRIGGER_SECRET || 'default-secret'; // Get the secret being sent
         const processImageUrl = `${baseUrl}/api/process-image`;
         console.log(`[Async Upload Job ${jobId}] Triggering background processing at: ${processImageUrl}`);
         console.log(`[Async Upload Job ${jobId}] Trigger URL used: ${processImageUrl}`); // Log full URL for verification
-        console.log(`[Async Upload Job ${jobId}] Sending trigger secret (masked): ...${triggerSecretToSend.slice(-4)}`); // Log masked secret
 
-        // Use fetch for fire-and-forget - DO NOT await this
-        fetch(processImageUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Internal-Trigger-Secret': triggerSecretToSend
-            },
-            body: JSON.stringify({ jobId: jobId })
-        }).catch(async (fetchError) => { // Make catch async to allow await redis.set
-            // Log the error, but don't fail the initial request.
-            console.error(`[Async Upload Job ${jobId}] CRITICAL: Error triggering background process fetch:`, fetchError);
-            // Optionally update Redis status to failed here if triggering fails critically
-            if (redis) {
-                 try {
-                     const triggerFailData = { 
-                         status: 'failed', 
-                         error: 'Failed to start background processing. Please try again.', // User-friendly message
-                         originalFilename: originalFilename, // Include some context
-                         createdAt: initialJobData.createdAt, // Keep original creation time
-                         finishedAt: Date.now()
-                      };
-                     await redis.set(jobId, JSON.stringify(triggerFailData));
-                     console.log(`[Async Upload Job ${jobId}] Updated Redis status to failed due to trigger error.`);
-                 } catch (redisError) {
-                     console.error(`[Async Upload Job ${jobId}] Failed to update Redis after trigger error:`, redisError);
-                 }
-            }
-        });
+        // Use QStash for triggering /api/process-image
+        try {
+            await qstashClient.publishJSON({
+                url: processImageUrl,
+                body: { jobId },
+                headers: { 'Content-Type': 'application/json' },
+                // Default QStash retries will apply
+            });
+            console.log(`Published job ${jobId} to QStash targeting ${processImageUrl}`);
+        } catch (qstashError) {
+            console.error(`Failed to publish job ${jobId} to QStash:`, qstashError);
+            // Update Redis to failed status if QStash publish fails critically
+             await redis.set(jobId, JSON.stringify({
+                ...initialJobData,
+                 status: 'failed',
+                 error: 'Failed to initiate recipe processing via QStash.',
+                 updatedAt: new Date().toISOString()
+             }), 'EX', 3600);
+            // Still return 202 to frontend, but job won't process
+            return res.status(202).json({ jobId });
+        }
 
         // Add log *after* dispatch attempt
         console.log(`[Async Upload Job ${jobId}] Background process fetch dispatched (fire-and-forget).`);

@@ -140,6 +140,24 @@ These issues directly impact the core value proposition or the demo user experie
     *   [X] Section 2: Remove parentheses and update wording for recipe card instructions.
     *   [X] Section 3: Rephrase final list instructions for clarity and action.
 *   **[X] Refine Intro Text Hierarchy:** Split the main intro text into a heading (H2) and subheading (P) for better visual structure.
+*   **[X] P0: Migrate Initial Job Triggers to QStash (Image & URL Flows):**
+    *   **Problem:** The current asynchronous triggers (`fetch` from `/api/upload` to `/api/process-image` and from `/api/process-url` to `/api/process-url-job`) are unreliable, lacking guaranteed delivery and retries. Jobs can get stuck in `pending` state in Redis if the trigger fails silently (e.g., Vercel cold start).
+    *   **Goal:** Replace the `fetch` triggers with Upstash QStash messages for guaranteed delivery and retries, mirroring the existing robust pattern used for the `/api/process-image` -> `/api/process-text-worker` step.
+    *   **Solution (Extend Existing QStash Pattern):**
+        1.  **[X] Verify Dependencies & Env Vars:** Ensure `@upstash/qstash` and `@upstash/redis` are present, and all `QSTASH_*` and `APP_BASE_URL`/`VERCEL_URL` environment variables are correctly configured for local (tunnel) and Vercel environments. (Verified `express.json` global, no base URL utility needed for now).
+        2.  **Refactor Trigger Endpoints:**
+            *   **[X] `/api/upload` (`uploadController.js`):** Remove `fetch`. After Blob upload and initial Redis `pending` status set, use the QStash `Client` (`qstashClient.publishJSON`) to send a message targeting the full public URL of `/api/process-image`, passing `{ jobId }` in the body. Return `202 Accepted` immediately.
+            *   **[ ] `/api/process-url` (`urlController.js`):** Remove `fetch`. After initial Redis `pending` status set, use the QStash `Client` to send a message targeting the full public URL of `/api/process-url-job`, passing `{ jobId }` in the body. Return `202 Accepted` immediately.
+        3.  **Refactor Target Endpoints into QStash Handlers:**
+            *   **[X] `/api/process-image` (`processImageRoutes.js`, `processImageController.js`):**
+                *   **[X] Route:** Add QStash `Receiver.verify()` middleware using the shared `Receiver` instance *before* the controller logic. Ensure correct handling of `express.json()` and signature verification (re-stringify `req.body` if needed for verification).
+                *   **[X] Controller:** Adapt the main function to be a QStash handler. Access `jobId` from `req.body`. **Crucially, port the existing core logic exactly:** fetch job from Redis, download from Blob, call Vision, **check Redis status to ensure idempotency (only proceed if status is 'pending' or appropriate initial state)**, handle Vision errors, publish *next* QStash message (to `/api/process-text-worker`), update Redis status (`vision_completed`, `failed`, etc.). Return appropriate status codes (200 for success/next step triggered, 5xx for retryable errors) to QStash.
+            *   **[ ] `/api/process-url-job` (`urlJobRoutes.js`, `urlJobController.js`):**
+                *   **[ ] Route:** Add `Receiver.verify()` middleware similarly.
+                *   **[ ] Controller:** Adapt to be a QStash handler. Access `jobId` from `req.body`. **Port existing core logic exactly:** fetch job from Redis, **check Redis status for idempotency**, fetch URL content, parse (JSON-LD/Readability), handle errors, potentially call initial LLM, update Redis status (`completed`, `failed` with specific error). Return appropriate status codes to QStash.
+        4.  **[X] Idempotency Check:** Explicitly add logic at the beginning of the QStash handlers (`processImageController`, `urlJobController`) to read the current job status from Redis. If the status is *not* the expected initial state (e.g., `pending`), log a warning and return `200 OK` immediately to prevent reprocessing. (Done for Image flow).
+        5.  **[X] Error Handling & Final Status:** Ensure terminal failures (after any internal retries within the controller and after QStash retries are exhausted) result in a clear `failed` status in Redis, including a specific error message indicating the point of failure (e.g., `vision_failed`, `url_fetch_failed`, `url_parse_failed`). Consider adding Blob cleanup for failed image jobs. (Done for Image flow).
+        6.  **[X] Staged Rollout & Testing:** Implement and thoroughly test the **Image Flow** first (local tunnel + Vercel deployment) before starting the **URL Flow**. Verify QStash console, Redis state, logs, and frontend behavior. (Image Flow Implementation Complete).
 
 ---
 
@@ -468,37 +486,4 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
         *   Generate `jobId`.
         *   Store initial job state in Vercel KV: `{ status: 'pending', inputUrl: url }`.
         *   Asynchronously trigger `/api/process-url-job` via `fetch` with `{ jobId }`.
-        *   Return `202 Accepted` with `{ jobId }`.
-    *   **[X] New Background Function (`/api/process-url-job` - Worker):
-        *   Input: `{ jobId }`.
-        *   Retrieve `inputUrl` from KV.
-        *   **[X] Step 1: Fetch HTML:** Use `node-fetch` (or similar). Handle errors (non-200, network, wrong content-type). Basic login wall detection (redirect URL, title/content keywords). Update KV with failure if issues arise.
-        *   **[X] Step 2: Structured Data Extraction (JSON-LD):
-            *   Use `cheerio` to parse HTML.
-            *   Search for `<script type="application/ld+json">` containing `@type: Recipe`.
-            *   If found, extract `name`, `recipeYield`, `recipeIngredient`.
-            *   Parse `recipeYield` into `{ quantity, unit }` object.
-            *   Pass `recipeIngredient` strings to a *specialized LLM prompt* for parsing into `{ quantity, unit, name }`.
-            *   On success, update KV: `{ status: 'completed', result: { title, yield: { quantity, unit }, ingredients, sourceUrl: inputUrl } }`.
-        *   **[X] Step 3: Fallback (Readability + LLM):** If JSON-LD fails/absent:
-            *   Use `@mozilla/readability` (with `jsdom`) to extract main article `title` and `content` HTML.
-            *   Get `textContent` from the cleaned content.
-            *   Use a *different, specialized LLM prompt* optimized for extracting recipe details (title, yield object, ingredients) from unstructured article text.
-            *   Parse LLM response.
-            *   On success, update KV: `{ status: 'completed', result: { title, yield: { quantity, unit }, ingredients, sourceUrl: inputUrl } }`.
-            *   On failure (Readability or LLM), update KV: `{ status: 'failed', error: 'Could not extract recipe details.' }`.
-    *   **[X] KV Client Correction:** Ensure `/api/job-status` uses `kvClient` locally.
-    *   **[X] New Dependencies:** `jsdom`, `@mozilla/readability`, `cheerio`.
-
-### Phase 2: Handling Client-Side Rendering & Improving Robustness [ ] 
-
-*   **Consider if Phase 1 proves insufficient for key target sites.**
-*   **Options (Investigate if needed):**
-    1.  **Serverless Headless Browser:** Puppeteer/Playwright (via Vercel functions or external service like Browserless.io) to render JS *before* applying Phase 1 extraction logic. Adds complexity/cost.
-    2.  **Third-Party Scraping APIs:** Dedicated services for rendering and extraction. Adds external dependency/cost.
-
-**Implementation Steps (Phase 1):**
-
-1.  [X] Add new dependencies (`jsdom`, `@mozilla/readability`, `cheerio`) to `backend/package.json`.
-2.  [X] Implement In-Memory KV Mock for Local Development in `backend/server.js`.
-3.  [X] Implement backend endpoints (`
+        *   Return `202 Accepted` with `
