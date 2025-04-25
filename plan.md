@@ -152,12 +152,24 @@ These issues directly impact the core value proposition or the demo user experie
             *   **[X] `/api/process-image` (`processImageRoutes.js`, `processImageController.js`):**
                 *   **[X] Route:** Add QStash `Receiver.verify()` middleware using the shared `Receiver` instance *before* the controller logic. Ensure correct handling of `express.json()` and signature verification (re-stringify `req.body` if needed for verification).
                 *   **[X] Controller:** Adapt the main function to be a QStash handler. Access `jobId` from `req.body`. **Crucially, port the existing core logic exactly:** fetch job from Redis, download from Blob, call Vision, **check Redis status to ensure idempotency (only proceed if status is 'pending' or appropriate initial state)**, handle Vision errors, publish *next* QStash message (to `/api/process-text-worker`), update Redis status (`vision_completed`, `failed`, etc.). Return appropriate status codes (200 for success/next step triggered, 5xx for retryable errors) to QStash.
-            *   **[ ] `/api/process-url-job` (`urlJobRoutes.js`, `urlJobController.js`):**
-                *   **[ ] Route:** Add `Receiver.verify()` middleware similarly.
-                *   **[ ] Controller:** Adapt to be a QStash handler. Access `jobId` from `req.body`. **Port existing core logic exactly:** fetch job from Redis, **check Redis status for idempotency**, fetch URL content, parse (JSON-LD/Readability), handle errors, potentially call initial LLM, update Redis status (`completed`, `failed` with specific error). Return appropriate status codes to QStash.
-        4.  **[X] Idempotency Check:** Explicitly add logic at the beginning of the QStash handlers (`processImageController`, `urlJobController`) to read the current job status from Redis. If the status is *not* the expected initial state (e.g., `pending`), log a warning and return `200 OK` immediately to prevent reprocessing. (Done for Image flow).
-        5.  **[X] Error Handling & Final Status:** Ensure terminal failures (after any internal retries within the controller and after QStash retries are exhausted) result in a clear `failed` status in Redis, including a specific error message indicating the point of failure (e.g., `vision_failed`, `url_fetch_failed`, `url_parse_failed`). Consider adding Blob cleanup for failed image jobs. (Done for Image flow).
-        6.  **[X] Staged Rollout & Testing:** Implement and thoroughly test the **Image Flow** first (local tunnel + Vercel deployment) before starting the **URL Flow**. Verify QStash console, Redis state, logs, and frontend behavior. (Image Flow Implementation Complete).
+            *   **[X] `/api/process-url-job` (`urlJobRoutes.js`, `urlJobController.js`):**
+                *   **[X] Route:** Add `Receiver.verify()` middleware similarly.
+                *   **[X] Controller:** Adapt to be a QStash handler. Access `jobId` from `req.body`. **Port existing core logic exactly:** fetch job from Redis, **check Redis status for idempotency**, fetch URL content, parse (JSON-LD/Readability), handle errors, potentially call initial LLM, update Redis status (`completed`, `failed` with specific error). Return appropriate status codes to QStash.
+                    *   **Checklist - `urlJobController.js` Refactor:**
+                        *   **[X] Adapt Function Signature:** Change `processUrlJob(req, res)` signature for QStash.
+                        *   **[X] Extract `jobId`:** Get `jobId` from `req.body`. Handle missing `jobId` (return 500).
+                        *   **[X] Redis Fetch & Type Check:** Fetch data using `redis.get(jobId)`. Handle `null`/`undefined` (return 200). Check `typeof` result (string vs object) and parse/use accordingly (Rule #17). Handle parse errors (set status failed, return 500).
+                        *   **[X] Idempotency Check:** Check `jobData.status`. If not `pending`, log and return `200 OK`.
+                        *   **[X] Input URL Check:** Verify `jobData.inputUrl` exists after parsing/retrieving from Redis (Rule #16). If missing, set status failed, return 500.
+                        *   **[X] Initial Status Update:** Update Redis status to `processing_started` using a helper function.
+                        *   **[X] Port Core Logic:** Carefully move existing logic blocks (HTML fetch, JSON-LD, Readability, LLM calls) into the new structure, wrapped in a main `try...catch`.
+                        *   **[X] Refactor Status Updates:** Replace direct `updateUrlJobStatusInRedis` calls with a unified helper (like in `processImageController`), passing correct status strings (`fetching_html`, `parsing_jsonld`, etc.) and error messages.
+                        *   **[X] Centralized Error Handling:** Use main `catch` block to call status update helper, setting status to `failed` with specific error message.
+                        *   **[X] Return Correct Codes:** Return `200 OK` on success/acknowledged states. Return `500` on processing errors.
+                        *   **[X] Module Export:** Ensure correct function name (`processUrlJob`) is exported.
+        4.  **[X] Idempotency Check:** Explicitly add logic at the beginning of the QStash handlers (`processImageController`, `urlJobController`) to read the current job status from Redis. If the status is *not* the expected initial state (e.g., `pending`), log a warning and return `200 OK` immediately to prevent reprocessing. (Done for Image flow & URL flow).
+        5.  **[X] Error Handling & Final Status:** Ensure terminal failures (after any internal retries within the controller and after QStash retries are exhausted) result in a clear `failed` status in Redis, including a specific error message indicating the point of failure (e.g., `vision_failed`, `url_fetch_failed`, `url_parse_failed`). Consider adding Blob cleanup for failed image jobs. (Done for Image flow & URL flow).
+        6.  **[X] Staged Rollout & Testing:** Implement and thoroughly test the **Image Flow** first (local tunnel + Vercel deployment) before starting the **URL Flow**. Verify QStash console, Redis state, logs, and frontend behavior. (Image Flow Implementation Complete, URL Flow Implementation Complete).
 
 ---
 
@@ -486,4 +498,22 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
         *   Generate `jobId`.
         *   Store initial job state in Vercel KV: `{ status: 'pending', inputUrl: url }`.
         *   Asynchronously trigger `/api/process-url-job` via `fetch` with `{ jobId }`.
-        *   Return `202 Accepted` with `
+        *   Return `202 Accepted` with `{ jobId }` to the frontend.
+        
+            *   **[X] Route:** Add `Receiver.verify()` middleware similarly.
+            *   **[X] Controller:** Adapt to be a QStash handler. Access `jobId` from `req.body`. **Port existing core logic exactly:** fetch job from Redis, **check Redis status for idempotency**, fetch URL content, parse (JSON-LD/Readability), handle errors, potentially call initial LLM, update Redis status (`completed`, `failed` with specific error). Return appropriate status codes to QStash.
+                *   **Checklist - `urlJobController.js` Refactor:**
+                    *   **[X] Adapt Function Signature:** Change `processUrlJob(req, res)` signature for QStash.
+                    *   **[X] Extract `jobId`:** Get `jobId` from `req.body`. Handle missing `jobId` (return 500).
+                    *   **[X] Redis Fetch & Type Check:** Fetch data using `redis.get(jobId)`. Handle `null`/`undefined` (return 200). Check `typeof` result (string vs object) and parse/use accordingly (Rule #17). Handle parse errors (set status failed, return 500).
+                    *   **[X] Idempotency Check:** Check `jobData.status`. If not `pending`, log and return `200 OK`.
+                    *   **[X] Input URL Check:** Verify `jobData.inputUrl` exists after parsing/retrieving from Redis (Rule #16). If missing, set status failed, return 500.
+                    *   **[X] Initial Status Update:** Update Redis status to `processing_started` using a helper function.
+                    *   **[X] Port Core Logic:** Carefully move existing logic blocks (HTML fetch, JSON-LD, Readability, LLM calls) into the new structure, wrapped in a main `try...catch`.
+                    *   **[X] Refactor Status Updates:** Replace direct `updateUrlJobStatusInRedis` calls with a unified helper (like in `processImageController`), passing correct status strings (`fetching_html`, `parsing_jsonld`, etc.) and error messages.
+                    *   **[X] Centralized Error Handling:** Use main `catch` block to call status update helper, setting status to `failed` with specific error message.
+                    *   **[X] Return Correct Codes:** Return `200 OK` on success/acknowledged states. Return `500` on processing errors.
+                    *   **[X] Module Export:** Ensure correct function name (`processUrlJob`) is exported.
+        4.  **[X] Idempotency Check:** Explicitly add logic at the beginning of the QStash handlers (`processImageController`, `urlJobController`) to read the current job status from Redis. If the status is *not* the expected initial state (e.g., `pending`), log a warning and return `200 OK` immediately to prevent reprocessing. (Done for Image flow & URL flow).
+        5.  **[X] Error Handling & Final Status:** Ensure terminal failures (after any internal retries within the controller and after QStash retries are exhausted) result in a clear `failed` status in Redis, including a specific error message indicating the point of failure (e.g., `vision_failed`, `url_fetch_failed`, `url_parse_failed`). Consider adding Blob cleanup for failed image jobs. (Done for Image flow & URL flow).
+        6.  **[X] Staged Rollout & Testing:** Implement and thoroughly test the **Image Flow** first (local tunnel + Vercel deployment) before starting the **URL Flow**. Verify QStash console, Redis state, logs, and frontend behavior. (Image Flow Implementation Complete, URL Flow Implementation Complete).

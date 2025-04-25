@@ -2,15 +2,17 @@
 
 This document outlines key rules and best practices to follow during development to ensure stability and prevent common issues.
 
-1.  **Environment Variable Loading:**
-    *   **Problem:** Relying on the default behavior of tools like `dotenv` can lead to errors if the process's working directory is unexpected.
-    *   **Rule:** When using `dotenv` (or similar tools) to load configuration from files, **always explicitly specify the path** to the configuration file (e.g., `require('dotenv').config({ path: './.env' })`).
-    *   **Verification:** Add temporary logging (e.g., logging masked keys or checking if variables are defined) during setup or debugging to confirm environment variables are loaded correctly *before* they are used in critical operations like API calls.
+1.  **Environment Variable Loading & Usage:**
+    *   **Problem:** Relying on the default behavior of tools like `dotenv` can lead to errors if the process's working directory is unexpected. Environment variables like `VERCEL_URL` might not contain expected components (e.g., protocol).
+    *   **Rule:** When using `dotenv` (or similar tools), **always explicitly specify the path** to the configuration file (e.g., `require('dotenv').config({ path: './.env' })`).
+    *   **Rule:** When constructing URLs for external services or callbacks using environment variables (like `VERCEL_URL` or custom base URLs), **explicitly ensure the protocol (`https://` or `http://`) is included**. Do not assume it's part of the variable unless verified.
+    *   **Verification:** Add temporary logging (e.g., logging masked keys or checking if variables are defined) during setup or debugging to confirm environment variables are loaded correctly *before* they are used in critical operations like API calls or URL construction.
 
-2.  **Scope of Changes:**
-    *   **Problem:** Modifying code unrelated to the current task or re-introducing previously removed logic can break functionality unexpectedly.
+2.  **Scope of Changes & Library Usage:**
+    *   **Problem:** Modifying code unrelated to the current task, re-introducing previously removed logic, or changing core library function calls unnecessarily can break functionality.
     *   **Rule:** Only modify code directly relevant to the immediate task or bug fix. **Strictly avoid** changing unrelated functions or re-adding logic that has been explicitly superseded by a new strategy.
-    *   **Verification:** After applying an edit, mentally review the diff or use source control tools (`git diff`) to confirm ONLY the intended lines were changed and no unrelated code was touched or old logic reintroduced.
+    *   **Rule:** When interacting with external libraries (`@vercel/blob`, `@upstash/redis`, etc.), **use the specific functions and syntax confirmed to work** in existing, functional parts of the codebase or verified via documentation. Avoid changing function calls (`put` vs `upload`) or syntax options (`{ ex: ... }` vs `'EX', ...`) without a clear, documented reason and verification.
+    *   **Verification:** After applying an edit, mentally review the diff or use source control tools (`git diff`) to confirm ONLY the intended lines were changed and no unrelated code or library calls were altered unnecessarily.
 
 3.  **LLM Constraints & Hybrid Approach:**
     *   **Problem:** LLMs, especially faster models, may not consistently adhere to strict numerical constraints, precise calculations, or specific rounding rules defined solely via prompts.
@@ -25,24 +27,24 @@ This document outlines key rules and best practices to follow during development
     *   **Rule:** When implementing flows where intermediate steps modify or filter data, ensure the *complete data structure* required for the final action is preserved.
     *   **Guideline:** Store necessary complex data (e.g., full objects, arrays like `line_item_measurements`) associated with UI elements (e.g., using `data-*` attributes storing JSON) if it needs to be retrieved accurately later, rather than trying to reconstruct it solely from displayed text.
 
-6.  **Edit Verification:**
-    *   **Problem:** Applying code edits, especially in structured files like `package.json` or configuration files, can inadvertently remove or modify unrelated but necessary lines if the edit context is imprecise.
+6.  **Edit Verification & Call Site Updates:**
+    *   **Problem:** Applying code edits, especially in structured files like `package.json` or configuration files, can inadvertently remove or modify unrelated but necessary lines if the edit context is imprecise. Refactoring or renaming functions requires updating all call sites.
     *   **Rule:** Before finalizing *any* code edit, mentally (or using diff tools) verify the *exact* changes being made. Pay special attention when modifying lists (like dependencies, routes, imports) or configuration blocks to ensure only the intended additions, deletions, or modifications are occurring, and that essential existing items are not accidentally removed.
-    *   **Rule Addendum:** When removing or refactoring a function, explicitly search the codebase for all locations where that function was called and ensure those call sites are also removed or updated appropriately to prevent `ReferenceError`s or logic errors.
-    *   **Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies like `express` in `package.json`, necessary function calls) was unexpectedly removed or left dangling, immediately point out the error and apply a corrective edit. 
+    *   **Rule:** When removing, refactoring, or **renaming** a function/module export, explicitly search the codebase for all locations where that function/export was called/imported and ensure those call sites are also removed or updated appropriately to prevent `ReferenceError`s or logic errors.
+    *   **Verification:** Review the diff provided after an edit is applied. If essential code (e.g., required dependencies, necessary function calls, correct function names in routes) was unexpectedly removed or left dangling/mismatched, immediately point out the error and apply a corrective edit.
 
 7.  **Variable Scope, Shadowing, and Declaration Order:**
     *   **Problem:** Accidentally re-declaring a variable within an inner scope (shadowing) or accessing `const`/`let` variables before their declaration (Temporal Dead Zone - TDZ) can lead to ReferenceErrors or unexpected behavior. This also applies to making up variable names that don't exist in the intended scope.
-    *   **Rule:** 
+    *   **Rule:**
         *   When accessing global or outer-scoped variables, **do not** re-declare a variable with the same name using `let` or `const` within that inner scope. Use the existing variable name directly.
         *   Within a given scope, variables/constants declared with `const` or `let` **must be declared *before*** any code that attempts to access them is executed. Ensure constants/variables are declared at the top of their relevant scope or at least before their first use.
         *   **Verify** that the variable names being used actually exist in the intended scope.
     *   **Verification:** Before finalizing an edit, check for variable shadowing and ensure all variables/constants are declared before they are accessed within their scope. Double-check variable names against their declarations.
 
-8.  **Check for Existing Functionality:**
-    *   **Problem:** Creating new modules, services, or functions without checking if similar functionality already exists leads to code duplication, increased maintenance burden, and potential inconsistencies.
-    *   **Rule:** Before implementing new functionality (especially helper functions, service interactions, or utility logic), **thoroughly search the codebase** (using file search, semantic search, or directory exploration) to identify existing modules, services, or functions that might already provide the needed capability or can be extended. Favor using or adapting existing code over creating duplicates.
-    *   **Verification:** Document the search process briefly in thoughts or comments if necessary. Ensure imports point to existing, relevant modules rather than newly created, potentially redundant ones. 
+8.  **Check for Existing Functionality & Patterns:**
+    *   **Problem:** Creating new modules, services, or functions without checking if similar functionality or **architectural patterns** already exist leads to code duplication, increased maintenance burden, and potential inconsistencies (e.g., initializing clients/receivers differently).
+    *   **Rule:** Before implementing new functionality (especially helper functions, service interactions, utility logic, or **client initialization/middleware patterns**), **thoroughly search the codebase** (using file search, semantic search, or directory exploration) to identify existing modules, services, functions, or established patterns (like direct initialization in routes vs. shared services) that might already provide the needed capability or should be followed for consistency. Favor using or adapting existing code/patterns over creating duplicates or diverging unnecessarily.
+    *   **Verification:** Document the search process briefly in thoughts or comments if necessary. Ensure imports and initialization logic align with existing, working patterns unless a deviation is explicitly justified.
 
 9.  **Raw Body Handling for Verification:**
     *   **Problem:** Libraries performing request verification (e.g., signature checks for webhooks/queues) often require the **raw, unparsed request body** string or buffer to correctly calculate hashes. Standard body-parsing middleware (like `express.json()` or implicit parsing by frameworks/platforms) can run *before* the verification logic, providing a parsed object instead of the raw body, leading to verification failures.
@@ -50,12 +52,12 @@ This document outlines key rules and best practices to follow during development
         *   Ensure any necessary middleware (like `@upstash/qstash`'s `Receiver` or Stripe's webhook handler) receives the request body in the format it expects (typically raw string or buffer).
         *   Be aware of default body parsers. Explicitly configure middleware (like `express.raw()`) to capture the raw body *if* it's guaranteed to run before any default parsing.
         *   If the body is unavoidably parsed before verification, check if the library supports verifying against a re-serialized string (e.g., `JSON.stringify(parsedBody)`), ensuring the serialization matches the original format precisely.
-    *   **Verification:** Log the `typeof` and the actual value of the request body *immediately before* it's passed to the verification function to confirm it's in the expected raw format or to understand how it needs to be handled (e.g., re-serialized). 
+    *   **Verification:** Log the `typeof` and the actual value of the request body *immediately before* it's passed to the verification function to confirm it's in the expected raw format or to understand how it needs to be handled (e.g., re-serialized).
 
 10. **Error Handling Within Loops:**
     *   **Problem:** Handling errors for individual items within a loop (e.g., `forEach`) using `try...catch` and then immediately returning (`return;`) from the entire function within the `catch` block prevents subsequent iterations and crucial final actions (like appending the partially processed results) outside the loop from executing.
     *   **Rule:** When using `try...catch` inside a loop to handle errors for individual iterations: Log or handle the error within the `catch` block, but **avoid** using `return` (or `throw`/`break` unless the error is truly fatal) if the goal is to process other items and perform actions after the loop. Allow the loop to continue and ensure code following the loop (e.g., appending a partially built list) can still run.
-    *   **Verification:** Check `catch` blocks inside loops. Ensure they handle the iteration's error appropriately without unnecessarily halting the entire function's execution if partial success is desired. 
+    *   **Verification:** Check `catch` blocks inside loops. Ensure they handle the iteration's error appropriately without unnecessarily halting the entire function's execution if partial success is desired.
 
 11. **Environment & Tooling Troubleshooting:**
     *   **Problem:** Issues like "command not found" or "could not determine executable" might stem from the local environment (Node/npm/nvm versions, cache, PATH) or unexpected changes in package structure/behavior (especially with major version bumps), rather than project code.
@@ -66,12 +68,12 @@ This document outlines key rules and best practices to follow during development
         4.  **Consider Version:** If using a very new major version of a tool/package, check its documentation for breaking changes or different invocation methods. Consider downgrading to a more stable/LTS version as a troubleshooting step.
         5.  **Clean & Reinstall:** Use `npm cache clean --force` and perform clean reinstalls (`rm -rf node_modules && rm package-lock.json && npm install`).
         6.  **Check Environment:** Verify `$PATH` and consider testing with a different Node.js version via NVM.
-    *   **Verification:** Document the troubleshooting steps taken. Prioritize checking for known issues or version incompatibilities before assuming project code errors for tool execution problems. 
+    *   **Verification:** Document the troubleshooting steps taken. Prioritize checking for known issues or version incompatibilities before assuming project code errors for tool execution problems.
 
 12. **DOM ID/Selector Consistency:**
     *   **Problem:** When dynamically generating HTML (e.g., in JavaScript) that includes elements with IDs or specific classes, and later trying to select or manipulate those elements using `getElementById`, `querySelector`, etc., inconsistencies in the generated ID format or selector string will cause the lookup to fail silently or throw errors.
     *   **Rule:** Ensure that the exact string format used to generate an element's ID or the selectors used to query elements (including class names) are identical between the code that creates the HTML and the code that later tries to find or interact with those elements. Pay close attention to template literals, variable interpolation, and specific class names.
-    *   **Verification:** When debugging issues where DOM manipulation isn't working, log the generated ID/selector from the creation code and the queried ID/selector from the manipulation code to verify they match exactly. Use browser developer tools (Elements tab) to inspect the rendered HTML and confirm the actual IDs/classes present. 
+    *   **Verification:** When debugging issues where DOM manipulation isn't working, log the generated ID/selector from the creation code and the queried ID/selector from the manipulation code to verify they match exactly. Use browser developer tools (Elements tab) to inspect the rendered HTML and confirm the actual IDs/classes present.
 
 13. **Prefer Libraries for Standard Problems:**
     *   **Problem:** Re-implementing complex, standard functionality like URL validation or date formatting from scratch increases development time, risks missing edge cases, and reduces maintainability.
@@ -80,21 +82,31 @@ This document outlines key rules and best practices to follow during development
 
 14. **Decouple Rendering and Post-Render Logic:**
     *   **Problem:** Race conditions can occur when JavaScript tries to access or modify DOM elements that depend on asynchronous data or are created dynamically, especially if the access attempt happens before the element is fully rendered or if the logic relies on other dynamically created elements (like the pantry checkbox influencing ingredient checkboxes).
-    *   **Rule:** When logic depends on the state of dynamically created elements or needs to manipulate them *after* they are rendered: 
+    *   **Rule:** When logic depends on the state of dynamically created elements or needs to manipulate them *after* they are rendered:
         1. Keep the initial HTML generation simple (e.g., default states).
         2. Place the logic that accesses or modifies these elements *after* the code that inserts the HTML into the DOM (e.g., after `element.innerHTML = ...`).
-    *   **Verification:** Review code that dynamically generates HTML and then immediately interacts with it. Ensure the interaction logic runs *after* the HTML is part of the document, especially if the logic relies on elements created in the same dynamic block. 
+    *   **Verification:** Review code that dynamically generates HTML and then immediately interacts with it. Ensure the interaction logic runs *after* the HTML is part of the document, especially if the logic relies on elements created in the same dynamic block.
 
 15. **CSS Specificity & Framework Integration:**
     *   **Problem:** Integrating utility-first frameworks (like Tailwind) into projects with existing CSS (especially using IDs or complex selectors) can lead to unexpected style overrides due to CSS specificity rules.
     *   **Rule:** When applying utility classes that don't seem to take effect (especially for layout, padding, color), use browser DevTools (Computed Styles panel) to check for higher-specificity rules from other stylesheets that might be overriding the utility classes. Prioritize resolving conflicts by removing or refactoring the overly specific legacy CSS rather than adding `!important` to utility classes.
     *   **Verification:** Inspect computed styles in DevTools. Identify the source of conflicting rules and address the specificity conflict directly in the CSS.
 
-16. **Frontend/Backend Data Contracts:**
-    *   **Problem:** API calls can fail with seemingly generic errors (like 400 Bad Request) if the frontend sends data in a structure (e.g., object keys, array formats) that doesn't perfectly match what the backend API endpoint expects and validates.
-    *   **Rule:** Before making significant changes to data structures passed between frontend and backend, or when debugging API call failures:
-        1. Verify the exact structure the frontend is sending (log the data immediately before the `fetch` call).
-        2. Verify the exact structure the backend API endpoint expects (read the backend controller/handler code, focusing on `req.body` destructuring and validation logic).
-        3. Ensure the keys, data types, and nesting match precisely.
-    *   **Verification:** Log frontend payload. Read backend validation code. Compare structures side-by-side.
+16. **Frontend/Backend Data Contracts & Consistency:**
+    *   **Problem:** API calls can fail with seemingly generic errors (like 400 Bad Request or unexpected runtime errors) if the frontend sends data in a structure (e.g., object keys, array formats) that doesn't perfectly match what the backend API endpoint expects, or if data stored in one step (e.g., Redis write) uses different keys/formats than expected in a subsequent step (e.g., Redis read).
+    *   **Rule:** Before making significant changes to data structures passed between frontend/backend or between asynchronous backend steps (via queues/storage):
+        1. Verify the exact structure the **sending** component is creating/storing (log the data immediately before `fetch` or `redis.set`).
+        2. Verify the exact structure the **receiving** component expects (read the backend controller/handler code, focusing on `req.body` or data retrieved from storage like Redis, checking expected keys).
+        3. Ensure the **keys, data types, and nesting match precisely** between sender/writer and receiver/reader.
+    *   **Verification:** Log frontend payload/data being stored. Read backend validation/data access code. Compare structures side-by-side.
+
+17. **Storage Client Data Types:**
+    *   **Problem:** Key-value stores or caches (like Redis) and their client libraries might return data in different formats (e.g., string, buffer, pre-parsed object) depending on configuration or data content. Directly attempting `JSON.parse` on a non-string value will throw an error.
+    *   **Rule:** When retrieving data from storage (e.g., `redis.get`): **Always check the `typeof` the returned value** before assuming it's a JSON string and attempting `JSON.parse`. Handle strings, objects, null/undefined gracefully.
+    *   **Verification:** Log the `typeof` and value returned from storage reads during development/debugging if encountering parsing errors.
+
+18. **Frontend State/Status Handling:**
+    *   **Problem:** Displaying raw internal backend status names (e.g., `processing_vision`) in the UI is confusing. Frontend polling logic might not handle all possible intermediate states correctly.
+    *   **Rule:** Map internal backend status codes/names to user-friendly display messages in the frontend rendering logic. Ensure frontend polling or state management logic **explicitly accounts for all valid intermediate statuses** returned by the backend to prevent incorrect displays or error states.
+    *   **Verification:** Review frontend rendering code (`renderSingleRecipeResult`) and polling logic (`pollJobStatus`) to ensure all backend statuses are mapped/handled appropriately.
     
