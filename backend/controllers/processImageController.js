@@ -152,9 +152,23 @@ async function processImage(req, res) {
             throw new Error('QStash client not initialized. Cannot trigger next step.');
         }
 
-        const targetWorkerUrl = `${process.env.APP_BASE_URL || process.env.VERCEL_URL}/api/process-text-worker`;
+        // FIX: Construct base URL correctly, adding protocol for VERCEL_URL
+        let baseUrl;
+        if (process.env.APP_BASE_URL) {
+            baseUrl = process.env.APP_BASE_URL; // Use local tunnel URL if provided
+        } else if (process.env.VERCEL_URL) {
+            baseUrl = `https://${process.env.VERCEL_URL}`; // Add https:// for Vercel deployments
+        } else {
+            // Throw a configuration error if neither is set
+            console.error("[Process Image QStash Job ${jobId}] CRITICAL: Cannot determine base URL. APP_BASE_URL and VERCEL_URL are missing.");
+            throw new Error('Server configuration error: Base URL not set.');
+        }
+
+        const targetWorkerUrl = `${baseUrl}/api/process-text-worker`;
+        
+        // This check should now pass, but remains as a safeguard
         if (!targetWorkerUrl.startsWith('http')) {
-            throw new Error(`Invalid QStash target URL for worker: ${targetWorkerUrl}`);
+            throw new Error(`Invalid QStash target URL constructed: ${targetWorkerUrl}`);
         }
 
         try {
