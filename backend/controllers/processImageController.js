@@ -20,7 +20,7 @@ async function updateRedisJobStatus(jobId, jobData, status, error = null, additi
         ...additionalData
     };
     try {
-        await redis.set(jobId, JSON.stringify(finalData), 'EX', 3600); // Keep 1hr expiry
+        await redis.set(jobId, JSON.stringify(finalData), { ex: 3600 }); // Use object { ex: seconds }
         console.log(`[Job ${jobId}] Updated Redis status to '${status}'${error ? ' (Error: ' + error + ')' : ''}`);
     } catch (redisError) {
         console.error(`[Job ${jobId}] CRITICAL: Failed to update Redis status to '${status}'. Error:`, redisError);
@@ -46,15 +46,37 @@ async function processImage(req, res) {
     try {
         // --- 1. Retrieve Job Details & Idempotency Check ---
         console.log(`[Process Image QStash Job ${jobId}] Fetching job details from Redis...`);
-        const jobDataStr = await redis.get(jobId);
-        if (!jobDataStr) {
+        const jobDataStrOrObj = await redis.get(jobId);
+        if (!jobDataStrOrObj) {
             console.warn(`[Process Image QStash Job ${jobId}] Job data not found in Redis. Assuming expired or already processed fully. Acknowledging message.`);
-            // Acknowledge QStash message (200 OK) to prevent retries for potentially completed/deleted job
             return res.status(200).json({ message: `Job data not found for ${jobId}, acknowledging.` });
         }
 
-        jobData = JSON.parse(jobDataStr);
-        imageUrl = jobData.imageUrl; // Store for cleanup
+        // FIX: Check if redis.get returned an object or string before parsing
+        if (typeof jobDataStrOrObj === 'string') {
+            try {
+                jobData = JSON.parse(jobDataStrOrObj);
+            } catch (parseError) {
+                console.error(`[Process Image QStash Job ${jobId}] Failed to parse job data string from Redis: ${jobDataStrOrObj}`, parseError);
+                // Treat as fatal error for this attempt, update Redis & signal QStash to retry (or fail)
+                await updateRedisJobStatus(jobId, { jobId }, 'failed', 'Invalid job data format in Redis');
+                return res.status(500).json({ message: 'Invalid job data format' });
+            }
+        } else if (typeof jobDataStrOrObj === 'object' && jobDataStrOrObj !== null) {
+            jobData = jobDataStrOrObj; // Assume it's the correct object
+        } else {
+            // Handle unexpected type from redis.get
+            console.error(`[Process Image QStash Job ${jobId}] Unexpected data type received from Redis: ${typeof jobDataStrOrObj}`);
+            await updateRedisJobStatus(jobId, { jobId }, 'failed', 'Unexpected job data format in Redis');
+            return res.status(500).json({ message: 'Unexpected job data format' });
+        }
+
+        imageUrl = jobData.imageUrl; // Store for cleanup - ensure jobData is valid first
+        if (!imageUrl) {
+             console.error(`[Process Image QStash Job ${jobId}] Job data from Redis is missing imageUrl.`);
+             await updateRedisJobStatus(jobId, jobData, 'failed', 'Job data missing image URL');
+             return res.status(500).json({ message: 'Job data missing image URL' });
+        }
 
         console.log(`[Process Image QStash Job ${jobId}] Retrieved job status: ${jobData.status}`);
         if (jobData.status !== 'pending') {

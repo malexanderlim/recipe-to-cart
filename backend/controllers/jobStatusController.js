@@ -75,7 +75,9 @@ async function getJobStatus(req, res) {
         // Handle other potential errors (Redis connection, unexpected errors)
         // Ensure response hasn't been sent
         if (!res.headersSent) {
-             res.status(500).json({ error: 'Failed to retrieve job status.', details: error.message });
+             // FIX: Add safety check for error.message
+             const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+             res.status(500).json({ error: 'Failed to retrieve job status.', details: errorMessage });
         }
     }
 }

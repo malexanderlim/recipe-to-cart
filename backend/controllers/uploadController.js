@@ -50,7 +50,7 @@ async function handleUpload(req, res) {
             blobUrl: blobUrl, // Store the URL to the image in Blob
             createdAt: Date.now()
         };
-        await redis.set(jobId, JSON.stringify(initialJobData), { ex: 86400 }); // Use redis.set with stringify
+        await redis.set(jobId, JSON.stringify(initialJobData), { ex: 3600 }); // Use object { ex: seconds }
         console.log(`[Async Upload Job ${jobId}] Initial job state stored.`);
 
         // 3. Asynchronously trigger the background processing function
