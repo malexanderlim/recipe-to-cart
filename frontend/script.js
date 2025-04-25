@@ -1301,9 +1301,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     createPantryCheckbox();
                 }
 
-            } else if (data.status === 'pending' || data.status === 'vision_completed' || data.status === 'processing_started' || data.status === 'fetching_html' || data.status === 'parsing_jsonld' || data.status === 'llm_parsing_ingredients' || data.status === 'parsing_readability' || data.status === 'llm_parsing_fallback' ) { // Added URL statuses
-                // Continue polling, check max attempts
-                // DO NOT render final state here - handled by timeout or next successful poll
+            } else if (data.status === 'pending' || 
+                       data.status === 'processing_vision' || // <<< ADD 'processing_vision' HERE
+                       data.status === 'vision_completed' || 
+                       data.status === 'processing_text' || // Add status from the next worker
+                       data.status === 'processing_started' || 
+                       data.status === 'fetching_html' || 
+                       data.status === 'parsing_jsonld' || 
+                       data.status === 'llm_parsing_ingredients' || 
+                       data.status === 'parsing_readability' || 
+                       data.status === 'llm_parsing_fallback' ) { 
+                // These are all valid intermediate statuses, just continue polling.
+                // The UI was already updated at the start of the function.
             } else if (data.status === 'not_found') {
                 console.error(`[Recipe ${recipeId}] Job ID ${jobId} not found. Stopping polling.`);
                 stopPolling(recipeId, 'Processing job data lost. Please try again.');
