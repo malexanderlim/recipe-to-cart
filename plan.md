@@ -139,6 +139,7 @@ These issues directly impact the core value proposition or the demo user experie
     *   [X] Section 1: Remove italics from instructions.
     *   [X] Section 2: Remove parentheses and update wording for recipe card instructions.
     *   [X] Section 3: Rephrase final list instructions for clarity and action.
+*   **[X] Refine Intro Text Hierarchy:** Split the main intro text into a heading (H2) and subheading (P) for better visual structure.
 
 ---
 
