@@ -374,6 +374,8 @@ Let me know if this revised plan aligns with your vision for crushing Demo Day!
 
 ## Asynchronous Processing Technical Design Document (TDD)
 
+**NOTE:** *This TDD describes the Vercel KV + fetch-based async approach initially implemented. The final, more robust implementation uses Upstash Redis for state and Upstash QStash for ALL asynchronous job triggering (upload -> process-image, process-url -> process-url-job, process-image -> process-text-worker), replacing the unreliable `fetch` triggers described below. See `PROJECT_OVERVIEW.md` for the current architecture.*
+
 **1. Problem Statement:**
 
 The current synchronous `/api/upload` endpoint performs multiple time-consuming operations (HEIC conversion, Google Vision API call, Anthropic Stage 1 API call). On Vercel's Hobby plan, this frequently exceeds the 10-second execution limit, resulting in a 504 Gateway Timeout error and preventing successful recipe parsing for larger or HEIC images.
@@ -477,8 +479,9 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
 
 ### Phase 1: MVP - Core URL Extraction [X]
 
+**NOTE:** *This TDD section describes the Vercel KV + fetch-based async approach initially implemented for URL extraction. The final implementation uses Upstash Redis for state and Upstash QStash for triggering `/api/process-url-job`. See `PROJECT_OVERVIEW.md` for the current architecture.*
+
 *   **Focus:** Handle common, well-structured recipe websites (especially those using JSON-LD schema) and provide clear errors for unsupported cases (login required, major fetch/parse failures).
-*   **Core Idea:** Fetch HTML, attempt structured data extraction (JSON-LD), fall back to cleaning HTML (Readability) and LLM parsing, reusing the existing async job infrastructure.
 
 **Technical Approach:**
 
