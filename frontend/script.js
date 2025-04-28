@@ -809,9 +809,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const finalIngredients = [];
         const listItems = reviewListArea.querySelectorAll('li.ingredient-item'); // Target specific list items
 
+        // --- Retrieve the dynamic title from the H3 header ---
+        let listTitle = 'My Recipe Ingredients'; // Default fallback
+        const titleHeader = reviewListArea.querySelector('h3'); 
+        if (titleHeader && titleHeader.textContent) {
+            // Clean up the text content slightly
+            listTitle = titleHeader.textContent.replace('Ingredients for ', '').trim();
+            // Ensure it's not empty after trimming
+            if (!listTitle) listTitle = 'My Recipe Ingredients'; 
+        }
+        console.log("Retrieved title for Instacart:", listTitle);
+        // ------------------------------------------------------
+
         listItems.forEach(item => {
             // *** FIX: Find the checkbox *within* the list item ***
-            const checkbox = item.querySelector('input[type="checkbox"]');
+            const checkbox = item.querySelector('input[type=\"checkbox\"]');
             // *** Ensure checkbox exists and is checked ***
             if (checkbox && checkbox.checked) {
                 // Retrieve the full data stored on the checkbox element
@@ -838,7 +850,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // --- Log final payload for debugging ---
-        console.log("Sending to Instacart:", JSON.stringify({ items: finalIngredients }, null, 2));
+        // *** UPDATE: Include the title in the log and payload ***
+        console.log("Sending to Instacart:", JSON.stringify({ ingredients: finalIngredients, title: listTitle }, null, 2));
 
         try {
             const response = await fetch(`${backendUrl}/api/send-to-instacart`, {
@@ -846,8 +859,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                // *** FIX: Send the array under the 'ingredients' key, not 'items' ***
-                body: JSON.stringify({ ingredients: finalIngredients }), 
+                // *** FIX: Send the array under the 'ingredients' key AND include the 'title' ***
+                body: JSON.stringify({ ingredients: finalIngredients, title: listTitle }), 
             });
 
             if (response.ok) {
