@@ -18,6 +18,13 @@ These issues directly impact the core value proposition or the demo user experie
         6.  **Configure QStash:** Set up topic/URL and retry policy in Upstash Console. **(Assumed DONE in Upstash)**
         7.  **Cleanup:** Remove old `/api/process-text` route/controller. **(DONE)**
         8.  **Testing:** Verify end-to-end flow. **(Partially DONE, confirmed via code review)**
+*   **[ ] Fix Vercel Blob Storage Cleanup (Delete on Success):**
+    *   **Problem:** Images in Vercel Blob storage are deleted on processing failure or "quick fail" (insufficient text), but NOT after successful Vision API processing and handoff to the next QStash worker (`/api/process-text-worker`). This causes successfully processed images to accumulate, leading to unnecessarily large storage usage.
+    *   **Goal:** Ensure that images are deleted from Vercel Blob storage immediately after they have been successfully processed by the Vision API and the job has been successfully published to the next QStash queue.
+    *   **Solution:**
+        1.  In `backend/controllers/processImageController.js`, within the `try` block where `qstashClient.publishJSON()` is called to trigger `/api/process-text-worker`:
+        2.  After a successful `qstashClient.publishJSON()` call, add logic to delete the image from Vercel Blob using `VercelBlobDelete(imageUrl, { token: process.env.BLOB_READ_WRITE_TOKEN });`.
+        3.  Wrap this deletion call in its own `try...catch` block to log any deletion errors without failing the overall job if the QStash publish was successful.
 *   **[X] Fix Ingredient Consolidation & Normalization (Revised Hybrid Approach V2 - SUCCESSFUL):**
     *   **P0 Addendum: Fixing Mixed-Unit Ingredient Consolidation (Garlic Example) - Strategy V2**
         *   **1. Problem Statement:** Previous attempts using multiple LLM calls or single calls with complex instructions failed due to LLM math errors, latency, or inability to handle context correctly (e.g., garlic cloves vs heads). The core issue is reliably consolidating diverse units while leveraging LLM knowledge without relying on its math.
