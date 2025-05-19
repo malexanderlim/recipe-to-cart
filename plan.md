@@ -492,7 +492,7 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
 
 **Technical Approach:**
 
-1.  **[X] Frontend (`index.html`, `script.js`):
+1.  **[X] Frontend (`index.html`, `script.js`):**
     *   Add URL input field and "Add Recipe from URL" button.
     *   On button click:
         *   Perform basic client-side URL validation.
@@ -501,7 +501,7 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
         *   Receive `jobId` from backend.
         *   Reuse existing `pollJobStatus(jobId)` and `renderSingleRecipeResult(result)` functions.
 
-2.  **[X] Backend (`server.js`):
+2.  **[X] Backend (`server.js`):**
     *   **[X] New Endpoint (`/api/process-url` - Trigger):
         *   Input: `{ url }`.
         *   Validate URL.
@@ -527,3 +527,84 @@ Leverage Vercel features (Serverless Functions, KV, Blob Storage) to implement a
         4.  **[X] Idempotency Check:** Explicitly add logic at the beginning of the QStash handlers (`processImageController`, `urlJobController`) to read the current job status from Redis. If the status is *not* the expected initial state (e.g., `pending`), log a warning and return `200 OK` immediately to prevent reprocessing. (Done for Image flow & URL flow).
         5.  **[X] Error Handling & Final Status:** Ensure terminal failures (after any internal retries within the controller and after QStash retries are exhausted) result in a clear `failed` status in Redis, including a specific error message indicating the point of failure (e.g., `vision_failed`, `url_fetch_failed`, `url_parse_failed`). Consider adding Blob cleanup for failed image jobs. (Done for Image flow & URL flow).
         6.  **[X] Staged Rollout & Testing:** Implement and thoroughly test the **Image Flow** first (local tunnel + Vercel deployment) before starting the **URL Flow**. Verify QStash console, Redis state, logs, and frontend behavior. (Image Flow Implementation Complete, URL Flow Implementation Complete).
+
+## P0: Airwallex Payment Link Demo Integration (Branch: airwallex-demo)
+
+**Goal:** Implement a "Book a Session with Michael" feature that integrates Airwallex payments, allowing a user to pay for consultations of varying lengths. This demonstrates understanding of Airwallex backend API integration for Payment Links and the Drop-in Element.
+
+**Tech Stack for this Feature:**
+*   **Backend:** Node.js/Express (existing `backend/server.js`, new controller `airwallexController.js`)
+*   **Frontend:** Vanilla HTML/CSS/JS (existing `frontend/index.html`, new script `frontend/airwallex-checkout.js`)
+*   **Airwallex API:** Demo environment (`https://api-demo.airwallex.com`), Airwallex.js SDK
+
+**Phase 1: Backend Setup - Dynamic Payment Intent & Link Creation**
+*   **[X] Environment Variables:**
+    *   In `backend/.env`, ensure `AIRWALLEX_CLIENT_ID` and `AIRWALLEX_API_KEY` are set with demo credentials.
+    *   Add `AIRWALLEX_DEMO_API_BASE_URL="https://api-demo.airwallex.com"`
+*   **[X] Backend Routes & Controller (`airwallexController.js`, `airwallexRoutes.js`):**
+    *   **[X] Routes:**
+        *   `POST /api/airwallex/create-payment-link`: Creates an Airwallex Payment Link.
+        *   `POST /api/airwallex/create-payment-intent`: Creates an Airwallex Payment Intent (used by Drop-in).
+    *   **[X] Controller Logic:**
+        *   **[X] Authentication Function:** Helper to get/cache Airwallex Bearer Token.
+        *   **[X] `createPaymentLink` Function:**
+            *   Accepts `amount`, `currency`, `description` from `req.body`.
+            *   Calls Airwallex `POST /api/v1/pa/payment_links/create` with dynamic details.
+            *   Returns `{ payment_link_url, payment_link_id }`.
+        *   **[X] `createPaymentIntent` Function:**
+            *   Accepts `amount`, `currency` (and optionally `description`) from `req.body`.
+            *   Calls Airwallex `POST /api/v1/pa/payment_intents/create` with dynamic details.
+            *   Returns `{ intent_id, client_secret, amount, currency }`.
+        *   **[X] Error Handling:** Graceful error handling for Airwallex API calls.
+
+**Phase 2: Frontend Integration - Multi-step Booking & Payment Flow**
+*   **[X] Modify `frontend/index.html`:**
+    *   **[X] "Book a Session" Card:**
+        *   Updated introductory text about consultation.
+        *   Initial button: `<button id="viewConsultationOptionsButton">View Consultation Options</button>`.
+        *   Hidden container: `<div id="sessionChoiceContainer">` with buttons for different session durations and prices (e.g., "15 Min Brainstorm - $75", "30 Min Strategy Call - $125", "1 Hour Deep Dive - $250"). These buttons store `data-amount`, `data-currency`, `data-description`.
+        *   Hidden container: `<div id="paymentChoiceContainer">` with buttons:
+            *   `<button id="payWithLinkButton">Pay with Secure Link</button>`
+            *   `<button id="payWithDropInButton">Pay with Card / Other Methods</button>`
+        *   Container for Payment Link URL: `<div id="paymentLinkContainer"></div>`.
+        *   Container for Drop-in Element: `<div id="drop-in-container" class="max-h-[450px] overflow-y-auto"></div>` (styled for constrained height).
+        *   General status message area: `<p id="paymentLinkMessage"></div>`.
+    *   **[X]** Simple static page: `frontend/payment-success.html`.
+    *   **[X]** Include `airwallex-checkout.js` (as `type="module"`) and Airwallex SDK via import map.
+*   **[X] Create `frontend/airwallex-checkout.js`:**
+    *   **[X] State Management:** Variable `selectedSessionDetails` to store chosen amount, currency, description.
+    *   **[X] UI Flow Logic:**
+        1.  `viewConsultationOptionsButton` click: Hides itself, shows `sessionChoiceContainer`.
+        2.  Session duration button click: Populates `selectedSessionDetails`, hides `sessionChoiceContainer`, shows `paymentChoiceContainer`.
+    *   **[X] `payWithLinkButton` Click Handler:**
+        *   Uses `selectedSessionDetails` to `fetch POST /api/airwallex/create-payment-link`.
+        *   Displays the returned `payment_link_url`.
+    *   **[X] `payWithDropInButton` Click Handler:**
+        *   Calls `initializeDropInElement()`.
+    *   **[X] `initializeDropInElement()` Function:**
+        *   Calls `Airwallex.init({ env: 'demo', ... })`.
+        *   Uses `selectedSessionDetails` to `fetch POST /api/airwallex/create-payment-intent`.
+        *   `Airwallex.createElement('dropIn', { intent_id, client_secret, currency })`.
+        *   Mounts element to `drop-in-container`.
+        *   Handles `on('ready')`, `on('success')` (redirects to success page), `on('error')` events.
+    *   **[X]** Robust error display and UI state management.
+
+**Phase 3: Webhook Confirmation (Discussion & Existing Setup)**
+*   **[X] Mention during Demo:** Explain that while the user is redirected, robust payment confirmation relies on webhooks.
+*   **[X] Airwallex Setup:** Events (e.g., `payment_link.paid`, `payment_intent.succeeded`) are configured in the Airwallex dashboard to send to your Pipedream URL (`https://eow2zak5z3nkcls.m.pipedream.net`).
+*   **[X] Pipedream:** You can monitor incoming events on Pipedream to show this part of the flow during the demo. For a real application, Pipedream could then call a webhook handler on your backend to update application state (e.g., mark session as paid).
+
+**Demo Flow:**
+1.  Show the "Book a Session" UI with the "View Consultation Options" button.
+2.  Click it, explain the different session options are now available.
+3.  Select a session (e.g., "30 Min Strategy Call - $125").
+4.  Explain the user can now choose their payment method.
+5.  **Path A (Payment Link):**
+    *   Click "Pay with Secure Link". Explain backend is calling Airwallex.
+    *   Show the generated payment link. Click it (opens Airwallex hosted page).
+6.  **Path B (Drop-in Element):**
+    *   Click "Pay with Card / Other Methods". Explain Airwallex.js SDK is initializing.
+    *   Show the Drop-in Element loaded in the sidebar (with its constrained height and scroll).
+    *   Interact with the Drop-in (e.g., enter test card details if available).
+7.  (For either path) Show successful payment and redirection to `payment-success.html`.
+8.  Show the payment confirmation event received in Pipedream.
