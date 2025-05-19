@@ -6,6 +6,14 @@ let selectedSessionDetails = {
     description: ''
 };
 
+// Function to determine the API base URL
+function getApiBaseUrl() {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        return 'http://localhost:3001'; // Local backend URL
+    }
+    return ''; // Relative paths for deployed environment
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const viewConsultationOptionsButton = document.getElementById('viewConsultationOptionsButton');
     const sessionChoiceContainer = document.getElementById('sessionChoiceContainer');
@@ -72,12 +80,13 @@ document.addEventListener('DOMContentLoaded', () => {
             payWithLinkButton.disabled = true;
             payWithDropInButton.style.display = 'none';
 
-            const fetchUrl = 'http://localhost:3001/api/airwallex/create-payment-link';
+            const apiBaseUrl = getApiBaseUrl();
+            const fetchUrl = `${apiBaseUrl}/api/airwallex/create-payment-link`;
             try {
                 const response = await fetch(fetchUrl, { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(selectedSessionDetails) // Send selected session details
+                    body: JSON.stringify(selectedSessionDetails)
                 });
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({}));
@@ -103,11 +112,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 paymentLinkMessage.className = 'text-sm text-red-600 mt-2 text-center';
             } finally {
                 payWithLinkButton.disabled = false; 
-                // Instead of showing main button, consider showing session options again or payment choices
-                // For now, leave it so user can click the generated link or may need a "start over"
-                // sessionChoiceContainer.style.display = 'block'; // Option to go back to session choice
-                 paymentChoiceContainer.style.display = 'block'; // Or back to payment method choice
-                 payWithDropInButton.style.display = 'block'; // Re-show other payment method
+                paymentChoiceContainer.style.display = 'block'; 
+                payWithDropInButton.style.display = 'block'; 
             }
         });
 
@@ -153,10 +159,11 @@ async function initializeDropInElement() {
         });
         console.log('Airwallex SDK initialized for Drop-in.');
 
-        const intentResponse = await fetch('http://localhost:3001/api/airwallex/create-payment-intent', {
+        const apiBaseUrl = getApiBaseUrl();
+        const intentResponse = await fetch(`${apiBaseUrl}/api/airwallex/create-payment-intent`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(selectedSessionDetails) // Send selected session details
+            body: JSON.stringify(selectedSessionDetails)
         });
 
         if (!intentResponse.ok) {
@@ -169,12 +176,10 @@ async function initializeDropInElement() {
             throw new Error('Essential Payment Intent details missing from backend response.');
         }
 
-        // Important: Drop-in uses the amount from the PaymentIntent, not directly passed here.
-        // The amount we sent to create-payment-intent will be used by Airwallex.
         const dropInElement = await createElement('dropIn', {
             intent_id: intentDetails.intent_id,
             client_secret: intentDetails.client_secret,
-            currency: intentDetails.currency, // This should match the paymentIntent's currency
+            currency: intentDetails.currency,
         });
 
         if (dropInElement) {
