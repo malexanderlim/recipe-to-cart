@@ -179,6 +179,18 @@ async function processImage(req, res) {
             });
             console.log(`[Process Image QStash Job ${jobId}] Successfully published job to QStash for text worker.`);
 
+            // Attempt Blob cleanup after successful processing and QStash publish
+            if (imageUrl && process.env.BLOB_READ_WRITE_TOKEN) {
+                try {
+                    console.log(`[Process Image QStash Job ${jobId}] Attempting Blob cleanup after successful processing...`);
+                    await VercelBlobDelete(imageUrl, { token: process.env.BLOB_READ_WRITE_TOKEN });
+                    console.log(`[Process Image QStash Job ${jobId}] Blob deleted successfully after processing.`);
+                } catch (blobDeleteError) {
+                    console.error(`[Process Image QStash Job ${jobId}] Failed to delete Blob after successful processing (continuing job):`, blobDeleteError);
+                    // Log error but do not let this failure prevent the job from being marked as vision_completed
+                }
+            }
+
             // --- 7. Final Redis Update on Success ---
             // Only update to 'vision_completed' AFTER successfully publishing the next job
             await updateRedisJobStatus(jobId, jobData, 'vision_completed', null, visionCompletedData);
