@@ -8,88 +8,151 @@
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="styles/output.css">
     <script src="https://cdn.jsdelivr.net/npm/validator@13.12.0/validator.min.js"></script>
+    <!-- Import Map for Airwallex SDK -->
+    <script type="importmap">
+        {
+            "imports": {
+                "@airwallex/components-sdk": "https://esm.sh/@airwallex/components-sdk"
+            }
+        }
+    </script>
 </head>
 <body class="bg-gray-100 font-sans text-gray-800">
     <h1 class="text-3xl font-bold text-center my-6 text-gray-700">Recipe to Cart</h1>
 
-    <div class="container mx-auto max-w-3xl px-4 py-12">
-        <!-- Restructured Intro Text -->
-        <h2 class="text-xl font-semibold text-center text-gray-700 mb-2">Turn recipe photos or URLs into shopping lists!</h2>
-        <p class="text-center text-gray-600 mb-8">Upload an image or paste a link, adjust servings, and we'll build your Instacart cart.</p>
+    <!-- NEW: Outer Flex Container for Main Content and Sidebar -->
+    <div class="lg:flex lg:gap-8 mx-auto max-w-screen-xl px-4 pt-8">
 
-        <!-- Section 1: Add Recipes -->
-        <section id="add-recipes-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
-            <h2 class="text-2xl font-semibold mb-4 border-b pb-2">1. Add Recipes 🍝</h2>
-            <p class="text-sm text-gray-600 mb-6">Add recipes by uploading images <strong class="font-semibold">and/or</strong> pasting URLs below:</p>
+        <!-- Main Content Column -->
+        <main class="lg:w-2/3">
+            <div class="container mx-auto max-w-3xl px-4 pt-8 pb-12">
+                <!-- Restructured Intro Text -->
+                <h2 class="text-xl font-semibold text-center text-gray-700 mb-2">Turn recipe photos or URLs into shopping lists!</h2>
+                <p class="text-center text-gray-600 mb-8">Upload an image or paste a link, adjust servings, and we'll build your Instacart cart.</p>
 
-            <div class="input-method mb-6 p-4 border border-gray-200 rounded-md">
-                <h3 class="text-lg font-medium mb-3">Upload Recipe Image(s)</h3>
-                <input type="file" id="recipeImages" accept="image/*,.heic,.heif" multiple class="block w-full text-sm text-gray-500
-                  file:mr-4 file:py-2 file:px-4
-                  file:rounded-full file:border-0
-                  file:text-sm file:font-semibold
-                  file:bg-blue-500 file:text-white
-                  file:hover:bg-blue-600 mb-2">
-                <p class="helper-text text-xs text-gray-500">(Supports JPG, PNG, HEIC, etc. Select one or more files.)</p>
-                <div id="image-preview-area" class="mt-4"></div> <!-- Previews will appear here -->
-            </div>
+                <!-- Section 1: Add Recipes -->
+                <section id="add-recipes-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
+                    <h2 class="text-2xl font-semibold mb-4 border-b pb-2">1. Add Recipes 🍝</h2>
+                    <p class="text-sm text-gray-600 mb-6">Add recipes by uploading images <strong class="font-semibold">and/or</strong> pasting URLs below:</p>
 
-            <div class="input-method p-4 border border-gray-200 rounded-md">
-                <h3 class="text-lg font-medium mb-3">Paste Recipe URL</h3>
-                <div class="url-input-container flex items-center gap-2">
-                    <input type="url" id="recipeUrlInput" placeholder="Enter recipe web address (e.g., https://...)" class="flex-grow px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                    <button id="addUrlButton" class="py-2 px-4 rounded-full border-0 text-sm font-semibold bg-blue-500 text-white hover:bg-blue-600 transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Add URL</button>
+                    <div class="input-method mb-6 p-4 border border-gray-200 rounded-md">
+                        <h3 class="text-lg font-medium mb-3">Upload Recipe Image(s)</h3>
+                        <input type="file" id="recipeImages" accept="image/*,.heic,.heif" multiple class="block w-full text-sm text-gray-500
+                          file:mr-4 file:py-2 file:px-4
+                          file:rounded-full file:border-0
+                          file:text-sm file:font-semibold
+                          file:bg-blue-500 file:text-white
+                          file:hover:bg-blue-600 mb-2">
+                        <p class="helper-text text-xs text-gray-500">(Supports JPG, PNG, HEIC, etc. Select one or more files.)</p>
+                        <div id="image-preview-area" class="mt-4"></div> <!-- Previews will appear here -->
+                    </div>
+
+                    <div class="input-method p-4 border border-gray-200 rounded-md">
+                        <h3 class="text-lg font-medium mb-3">Paste Recipe URL</h3>
+                        <div class="url-input-container flex items-center gap-2">
+                            <input type="url" id="recipeUrlInput" placeholder="Enter recipe web address (e.g., https://...)" class="flex-grow px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <button id="addUrlButton" class="py-2 px-4 rounded-full border-0 text-sm font-semibold bg-blue-500 text-white hover:bg-blue-600 transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Add URL</button>
+                        </div>
+                        <p id="url-error-message" class="text-red-600 text-sm mt-1" style="display: none;"></p>
+                        <p class="text-xs text-gray-500 mt-1">(Note: Recipes behind paywalls or requiring login cannot be accessed.)</p>
+                    </div>
+                </section>
+
+                <!-- Section 2: Review Extracted Ingredients -->
+                <section id="results-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
+                    <h2 class="text-2xl font-semibold mb-4 border-b pb-2">2. Review Extracted Ingredients 📝</h2>
+                    <p class="helper-text text-sm text-gray-600 mb-4">Adjust servings and uncheck items you already have before reviewing the final list.</p>
+                    <!-- Pantry checkbox added dynamically here -->
+                    <div id="recipe-results-container">
+                        <!-- Recipe result cards will be injected here by script.js -->
+                        <div id="empty-state-message" class="text-center text-gray-500 py-10 px-4">
+                            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                <path vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                              </svg>
+                            <h3 class="mt-2 text-sm font-medium text-gray-900">No recipes added</h3>
+                            <p class="mt-1 text-sm text-gray-500">Upload an image or paste a URL above to get started.</p>
+                        </div>
+                    </div>
+
+                    <div id="loading-indicator" class="loading text-center text-gray-500 py-4" style="display: none;">Processing...</div>
+                    <div id="error-message" class="error-message text-red-600 text-center py-4 bg-red-50 p-2 rounded-md" style="display: none;"></div>
+
+                    <!-- Consolidate Button - Logically leads to the next step -->
+                    <div class="action-area text-center mt-6">
+                         <button id="create-list-button" disabled class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Review Final List</button>
+                    </div>
+                </section>
+
+                <!-- Section 3: Final Shopping List -->
+                <section id="final-list-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8 transition-opacity duration-300 ease-in-out opacity-0" style="display: none;">
+                     <h2 class="text-2xl font-semibold mb-4 border-b pb-2">3. Final Shopping List 🛒</h2>
+                     <div id="review-list-area">
+                         <!-- Content generated by displayReviewList -->
+                     </div>
+                     <div id="instacart-feedback" class="mt-4">
+                        <div id="instacart-loading-indicator" class="text-gray-600 mt-2" style="display: none;"></div>
+                        <div id="instacart-error-message" class="text-red-600 bg-red-50 p-2 rounded-md mt-2" style="display: none;"></div>
+                        <div id="instacart-link-area" class="mt-6 text-center">
+                           <!-- Instacart link/button appears here -->
+                           <button id="sendToInstacartButton" class="inline-flex items-center justify-center h-46px px-18px py-4 bg-instacart-green text-instacart-cream rounded-full space-x-2 hover:opacity-90 active:scale-95 transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-instacart-green">
+                            <img src="assets/Instacart_Carrot.svg" alt="Instacart logo" class="w-[22px] h-[22px]"> 
+                            <span class="text-sm whitespace-nowrap">Shop with Instacart</span>
+                           </button>
+                        </div>
+                     </div>
+                </section>
+            </div> <!-- End of original-container-classes -->
+        </main>
+
+        <!-- Sidebar Column -->
+        <aside class="lg:w-1/3 lg:pt-5 lg:sticky lg:top-8 h-fit">
+            <!-- Section: Book a Session (MOVED AND WRAPPED) -->
+            <section id="book-session-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
+                <h2 class="text-2xl font-semibold mb-4 border-b pb-2">🗓️ Book a Session with Michael</h2>
+                <p class="text-sm text-gray-600 mb-6">Interested in a 1-hour consultation to discuss your app ideas, project strategy, or get technical advice? Select an option below to get started.</p>
+                
+                <div class="action-area text-center mt-2">
+                    <button id="viewConsultationOptionsButton" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-full transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 text-base">
+                        View Consultation Options
+                    </button>
+
+                    <!-- New Session Duration Choices (initially hidden) -->
+                    <div id="sessionChoiceContainer" class="mt-4 space-y-3" style="display: none;">
+                        <button class="session-option-button w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-full text-base transition duration-150 ease-in-out" data-amount="75" data-currency="USD" data-description="15 Minute Brainstorm Session">
+                            15 Min Brainstorm - $75
+                        </button>
+                        <button class="session-option-button w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-full text-base transition duration-150 ease-in-out" data-amount="125" data-currency="USD" data-description="30 Minute Strategy Call">
+                            30 Min Strategy Call - $125
+                        </button>
+                        <button class="session-option-button w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-full text-base transition duration-150 ease-in-out" data-amount="250" data-currency="USD" data-description="1 Hour Deep Dive Session">
+                            1 Hour Deep Dive - $250
+                        </button>
+                    </div>
+
+                    <!-- Existing Payment Method Choice Buttons (initially hidden) -->
+                    <div id="paymentChoiceContainer" class="mt-4 space-y-3" style="display: none;">
+                        <button id="payWithLinkButton" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-full transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-base">
+                            Pay with Secure Link
+                        </button>
+                        <button id="payWithDropInButton" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-6 rounded-full transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 text-base">
+                            Pay with Card / Other Methods
+                        </button>
+                    </div>
                 </div>
-                <p id="url-error-message" class="text-red-600 text-sm mt-1" style="display: none;"></p>
-                <p class="text-xs text-gray-500 mt-1">(Note: Recipes behind paywalls or requiring login cannot be accessed.)</p>
-            </div>
-        </section>
-
-        <!-- Section 2: Review Extracted Ingredients -->
-        <section id="results-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8">
-            <h2 class="text-2xl font-semibold mb-4 border-b pb-2">2. Review Extracted Ingredients 📝</h2>
-            <p class="helper-text text-sm text-gray-600 mb-4">Adjust servings and uncheck items you already have before reviewing the final list.</p>
-            <!-- Pantry checkbox added dynamically here -->
-            <div id="recipe-results-container">
-                <!-- Recipe result cards will be injected here by script.js -->
-                <div id="empty-state-message" class="text-center text-gray-500 py-10 px-4">
-                    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                        <path vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-                      </svg>
-                    <h3 class="mt-2 text-sm font-medium text-gray-900">No recipes added</h3>
-                    <p class="mt-1 text-sm text-gray-500">Upload an image or paste a URL above to get started.</p>
+                <!-- Container for Payment Link URL -->
+                <div id="paymentLinkContainer" class="mt-4 text-center">
+                    <!-- Payment link will be displayed here -->
                 </div>
-            </div>
+                <!-- Container for Airwallex Drop-in Element -->
+                <div id="drop-in-container" class="mt-4 max-h-[450px] overflow-y-auto"></div>
+                <!-- General status/error messages -->
+                <p id="paymentLinkMessage" class="text-sm text-gray-600 mt-2 text-center" style="display: none;"></p>
+            </section>
+        </aside>
 
-            <div id="loading-indicator" class="loading text-center text-gray-500 py-4" style="display: none;">Processing...</div>
-            <div id="error-message" class="error-message text-red-600 text-center py-4 bg-red-50 p-2 rounded-md" style="display: none;"></div>
-
-            <!-- Consolidate Button - Logically leads to the next step -->
-            <div class="action-area text-center mt-6">
-                 <button id="create-list-button" disabled class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition duration-150 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Review Final List</button>
-            </div>
-        </section>
-
-        <!-- Section 3: Final Shopping List -->
-        <section id="final-list-section" class="step-section bg-white p-6 rounded-lg shadow-md mb-8 transition-opacity duration-300 ease-in-out opacity-0" style="display: none;">
-             <h2 class="text-2xl font-semibold mb-4 border-b pb-2">3. Final Shopping List 🛒</h2>
-             <div id="review-list-area">
-                 <!-- Content generated by displayReviewList -->
-             </div>
-             <div id="instacart-feedback" class="mt-4">
-                <div id="instacart-loading-indicator" class="text-gray-600 mt-2" style="display: none;"></div>
-                <div id="instacart-error-message" class="text-red-600 bg-red-50 p-2 rounded-md mt-2" style="display: none;"></div>
-                <div id="instacart-link-area" class="mt-6 text-center">
-                   <!-- Instacart link/button appears here -->
-                   <button id="sendToInstacartButton" class="inline-flex items-center justify-center h-46px px-18px py-4 bg-instacart-green text-instacart-cream rounded-full space-x-2 hover:opacity-90 active:scale-95 transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-instacart-green">
-                    <img src="assets/Instacart_Carrot.svg" alt="Instacart logo" class="w-[22px] h-[22px]"> 
-                    <span class="text-sm whitespace-nowrap">Shop with Instacart</span>
-                   </button>
-                </div>
-             </div>
-        </section>
-    </div>
+    </div> <!-- End of Outer Flex Container -->
 
     <script src="script.js"></script>
+    <script type="module" src="airwallex-checkout.js" defer></script>
 </body>
 </html> 
