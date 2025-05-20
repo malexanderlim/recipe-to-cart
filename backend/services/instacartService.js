@@ -9,7 +9,7 @@ const axios = require('axios');
 async function sendToInstacart(ingredients, title = 'My Recipe Ingredients') {
     console.log('Sending ingredients to Instacart API');
     
-    const instacartApiKey = process.env.INSTACART_API_KEY;
+    const instacartApiKey = process.env.INSTACART_API_KEY_PROD;
     
     if (!ingredients || !Array.isArray(ingredients)) {
         throw new Error('Invalid or missing ingredients data for Instacart API call.');
@@ -20,7 +20,7 @@ async function sendToInstacart(ingredients, title = 'My Recipe Ingredients') {
     }
     
     // Construct the request body for Instacart API
-    const instacartApiUrl = 'https://connect.dev.instacart.tools/idp/v1/products/products_link'; // Dev URL
+    const instacartApiUrl = 'https://connect.instacart.com/idp/v1/products/products_link'; // Production URL
     const instacartRequestBody = {
         title: title,
         link_type: 'shopping_list',
